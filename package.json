@@ -1,0 +1,30 @@
+{
+  "name": "r36s-manager",
+  "version": "1.0.0",
+  "description": "R36S Game Manager — macOS style Electron app",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --inspect",
+    "build": "electron-builder --mac --win"
+  },
+  "devDependencies": {
+    "electron": "^28.3.3",
+    "electron-builder": "^24.0.0"
+  },
+  "dependencies": {
+    "node-ssh": "^13.1.0",
+    "xml2js": "^0.6.2"
+  },
+  "build": {
+    "appId": "com.r36s.manager",
+    "productName": "R36S Manager",
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": "dmg"
+    },
+    "win": {
+      "target": "nsis"
+    }
+  }
+}

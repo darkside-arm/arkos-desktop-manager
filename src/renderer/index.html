@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' data: blob: file:; media-src 'self' data: blob: file:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com;" />
+  <title>R36S Manager</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════
+     TITLEBAR CUSTOM (Windows/Linux — en macOS usan los nativos)
+════════════════════════════════════════════════════════════ -->
+<div class="titlebar" id="titlebar">
+  <!-- En macOS los traffic-lights nativos se pintan aquí automáticamente -->
+  <!-- En Windows/Linux usamos estos botones -->
+  <div class="titlebar-wincontrols" id="win-controls">
+    <button class="wc-btn wc-close" id="wc-close" title="Cerrar" aria-label="Cerrar"></button>
+    <button class="wc-btn wc-min"   id="wc-min"   title="Minimizar" aria-label="Minimizar"></button>
+    <button class="wc-btn wc-max"   id="wc-max"   title="Maximizar" aria-label="Maximizar"></button>
+  </div>
+  <div class="titlebar-drag"></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     CONNECT SHEET
+════════════════════════════════════════════════════════════ -->
+<div class="sheet-overlay" id="connect-sheet">
+  <div class="sheet sheet-connect">
+
+    <div class="sheet-icon">🎮</div>
+    <h2 class="sheet-title">R36S Manager</h2>
+    <p class="sheet-sub">Selecciona una consola o añade una nueva</p>
+
+    <div class="saved-consoles" id="saved-consoles"></div>
+
+    <div class="connect-divider hidden" id="connect-divider">
+      <span>Nueva conexión</span>
+    </div>
+
+    <div class="connect-form" id="connect-form">
+      <label class="field field-full">
+        <span>Nombre de la consola</span>
+        <input type="text" id="ssh-name" placeholder="Mi R36S" autocomplete="off" />
+      </label>
+      <div class="form-grid">
+        <label class="field">
+          <span>Host / IP</span>
+          <input type="text" id="ssh-host" placeholder="192.168.1.100" autocomplete="off" />
+        </label>
+        <label class="field field-sm">
+          <span>Puerto</span>
+          <input type="number" id="ssh-port" value="22" />
+        </label>
+        <label class="field">
+          <span>Usuario</span>
+          <input type="text" id="ssh-user" value="ark" />
+        </label>
+        <label class="field">
+          <span>Contraseña</span>
+          <input type="password" id="ssh-pass" placeholder="ark" />
+        </label>
+      </div>
+    </div>
+
+    <div class="sheet-actions">
+      <button class="btn-primary btn-full" id="btn-connect">
+        <span class="btn-spinner hidden" id="connect-spinner"></span>
+        <span id="btn-connect-label">Conectar</span>
+      </button>
+      <button class="btn-ghost btn-full" id="btn-exit" style="margin-top:8px">Salir</button>
+    </div>
+    <p class="sheet-error hidden" id="connect-error"></p>
+
+    <div class="autoreconnect hidden" id="autoreconnect">
+      <span class="spinner-sm"></span>
+      <span>Reconectando a <strong id="autoreconnect-name"></strong>…</span>
+      <button class="btn-ghost btn-xs" id="btn-cancel-auto">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     PASSWORD PROMPT  (mini-sheet para consolas guardadas)
+════════════════════════════════════════════════════════════ -->
+<div class="sheet-overlay hidden" id="pass-sheet">
+  <div class="sheet sheet-pass">
+    <div class="pass-console-info">
+      <div class="pass-icon" id="pass-icon">🎮</div>
+      <div>
+        <div class="pass-name" id="pass-name">—</div>
+        <div class="pass-host" id="pass-host">—</div>
+      </div>
+    </div>
+    <label class="field field-full" style="margin-top:16px">
+      <span>Contraseña SSH</span>
+      <input type="password" id="pass-input" placeholder="Introduce la contraseña…"
+             autocomplete="current-password" />
+    </label>
+    <label class="pass-remember">
+      <input type="checkbox" id="pass-remember" checked />
+      <span>Recordar en esta sesión</span>
+    </label>
+    <div class="sheet-actions">
+      <button class="btn-primary btn-full" id="pass-ok">
+        <span class="btn-spinner hidden" id="pass-spinner"></span>
+        <span id="pass-ok-label">Conectar</span>
+      </button>
+      <button class="btn-ghost btn-full" id="pass-cancel" style="margin-top:6px">Cancelar</button>
+    </div>
+    <p class="sheet-error hidden" id="pass-error"></p>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     APP SHELL
+════════════════════════════════════════════════════════════ -->
+<div class="app hidden" id="app">
+
+  <!-- ── SIDEBAR ─────────────────────────────────────────── -->
+  <aside class="sidebar">
+
+    <!-- espacio para traffic-lights nativos macOS -->
+    <div class="sidebar-tl-space" id="sidebar-tl-space"></div>
+
+    <div class="sidebar-brand">
+      <div class="brand-icon">🎮</div>
+      <div class="brand-text">
+        <div class="brand-name">R36S Manager</div>
+        <div class="brand-host" id="brand-host">—</div>
+      </div>
+      <button class="sidebar-disconnect" id="btn-disconnect" title="Desconectar">⏏</button>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-section-label">Biblioteca</div>
+
+      <button class="nav-item active" data-view="all" id="nav-all">
+        <span class="nav-icon">⊞</span>
+        <span class="nav-label">Todos los juegos</span>
+        <span class="nav-badge" id="badge-all">—</span>
+      </button>
+      <button class="nav-item" data-view="favorites" id="nav-favorites">
+        <span class="nav-icon">♥</span>
+        <span class="nav-label">Favoritos</span>
+        <span class="nav-badge" id="badge-fav">0</span>
+      </button>
+      <button class="nav-item" data-view="collections" id="nav-collections">
+        <span class="nav-icon">📁</span>
+        <span class="nav-label">Colecciones</span>
+        <span class="nav-badge" id="badge-col">—</span>
+      </button>
+
+      <!-- Resultados de búsqueda (aparece en sidebar al hacer Enter) -->
+      <div id="search-section" class="hidden">
+        <div class="nav-section-label nav-section-search">
+          <span>Resultados</span>
+          <button class="search-section-clear" id="search-section-clear" title="Cerrar búsqueda">✕</button>
+        </div>
+        <button class="nav-item" data-view="search" id="nav-search">
+          <span class="nav-icon">⌕</span>
+          <span class="nav-label" id="nav-search-label">—</span>
+          <span class="nav-badge" id="badge-search">0</span>
+        </button>
+      </div>
+
+      <div class="nav-section-label">Sistemas</div>
+      <div id="systems-list">
+        <div class="sidebar-loading">
+          <span class="spinner-sm"></span> Cargando…
+        </div>
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <span class="dot-status" id="dot-status"></span>
+      <span id="footer-status">Cargando…</span>
+    </div>
+  </aside>
+
+  <!-- ── MAIN ────────────────────────────────────────────── -->
+  <main class="content">
+
+    <!-- TOOLBAR -->
+    <header class="toolbar">
+      <div class="toolbar-left">
+        <h1 class="toolbar-title" id="toolbar-title">Todos los juegos</h1>
+        <span class="toolbar-count" id="toolbar-count"></span>
+      </div>
+
+      <!-- ── BUSCADOR GLOBAL ── -->
+      <div class="global-search-wrap" id="global-search-wrap">
+        <span class="gs-icon">⌕</span>
+        <input type="text" id="global-search" class="global-search-input"
+               placeholder="Buscar juego…" autocomplete="off" spellcheck="false" />
+        <button class="gs-clear hidden" id="gs-clear">✕</button>
+      </div>
+
+      <div class="toolbar-right">
+        <div class="segmented" id="view-toggle">
+          <button class="seg-btn active" data-layout="grid" title="Cuadrícula">⊞</button>
+          <button class="seg-btn" data-layout="list" title="Lista">☰</button>
+        </div>
+        <button class="btn-action" id="btn-refresh-cache" title="Recargar desde consola">↻</button>
+        <button class="btn-action btn-action-accent" id="btn-analyze">✦ Colecciones</button>
+      </div>
+    </header>
+
+    <!-- LOADING -->
+    <div class="content-loading hidden" id="content-loading">
+      <div class="big-spinner"></div>
+      <p id="loading-msg">Leyendo gamelists…</p>
+    </div>
+
+    <!-- EMPTY -->
+    <div class="empty-state hidden" id="empty-state">
+      <div class="empty-icon">🕹️</div>
+      <h3>Sin resultados</h3>
+      <p>No se encontraron juegos.</p>
+    </div>
+
+    <!-- GAMES GRID -->
+    <div class="games-container" id="games-container">
+      <div class="games-grid" id="games-grid"></div>
+    </div>
+
+    <!-- PAGINADOR -->
+    <div class="paginator hidden" id="paginator"></div>
+
+    <!-- COLLECTIONS VIEW -->
+    <div class="collections-view hidden" id="collections-view">
+      <div class="col-header">
+        <h2>Colecciones personalizadas</h2>
+      </div>
+      <div class="col-list" id="col-list"></div>
+      <div class="col-suggestions">
+        <div class="col-sugg-header">
+          <h3>✦ Sugerencias inteligentes</h3>
+          <p>Detectadas automáticamente por nombre de saga</p>
+        </div>
+        <div class="sugg-cards" id="sugg-cards">
+          <div class="sugg-empty">Haz clic en <strong>✦ Colecciones</strong> para analizar tu biblioteca.</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ── DETAIL PANEL ──────────────────────────────────────── -->
+<div class="detail-overlay hidden" id="detail-overlay"></div>
+<aside class="detail-panel hidden" id="detail-panel">
+  <button class="detail-close" id="detail-close">✕</button>
+
+  <!-- Media principal (imagen/video del juego actual) -->
+  <div class="detail-media" id="detail-media">
+    <video id="detail-video" loop muted playsinline class="hidden"></video>
+    <img   id="detail-img"   src="" alt="" />
+    <div class="detail-no-media hidden" id="detail-no-media">🖼️</div>
+    <button class="detail-retry-btn hidden" id="detail-retry-btn">↻ Reintentar</button>
+    <button class="detail-video-btn hidden" id="detail-video-btn">▶ Ver video</button>
+  </div>
+
+  <div class="detail-body">
+    <div class="detail-system-badge" id="detail-system">—</div>
+    <h2  class="detail-title"        id="detail-title">—</h2>
+    <div class="detail-meta-row"     id="detail-meta"></div>
+    <div class="detail-rating-row">
+      <div class="detail-rating" id="detail-rating"></div>
+      <button class="detail-play-btn" id="detail-play-btn" title="Lanzar juego en la consola">▶ Jugar</button>
+    </div>
+    <p   class="detail-desc"         id="detail-desc"></p>
+    <div class="detail-info-grid"    id="detail-info"></div>
+
+    <div class="detail-actions">
+      <button class="btn-primary"              id="detail-fav-btn">♥ Favorito</button>
+      <button class="btn-secondary"            id="detail-collection-btn">📁 Colección</button>
+      <button class="btn-secondary btn-scrape" id="detail-scrape-btn">🔍 Scrape</button>
+    </div>
+
+    <!-- Estado scraping: buscando -->
+    <div class="scrape-status hidden" id="scrape-status">
+      <span class="scrape-spinner"></span>
+      <span id="scrape-msg">Buscando en Google Images…</span>
+    </div>
+
+  </div>
+</aside>
+
+<!-- ── SCRAPE PICKER (ventana aparte) ───────────────────── -->
+<div class="sheet-overlay hidden" id="scrape-picker-sheet">
+  <div class="sheet sheet-wide scrape-picker-sheet">
+    <button class="sheet-close" id="scrape-picker-close">✕</button>
+    <div class="sheet-icon">🖼</div>
+    <h2 class="sheet-title">Elegir portada</h2>
+    <p class="sheet-sub" id="scrape-picker-meta">Buscando opciones…</p>
+
+    <div class="scrape-options-grid scrape-options-grid-large" id="scrape-options"></div>
+
+    <div class="scrape-status hidden" id="scrape-commit-status">
+      <span class="scrape-spinner"></span>
+      <span id="scrape-commit-msg">Subiendo…</span>
+    </div>
+
+    <div class="sheet-actions">
+      <button class="btn-primary" id="scrape-confirm-btn">
+        <span class="btn-spinner hidden" id="scrape-confirm-spinner"></span>
+        ✓ Usar portada seleccionada
+      </button>
+      <button class="btn-ghost" id="scrape-discard-btn">Descartar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── COLLECTION BUILDER ────────────────────────────────── -->
+<div class="sheet-overlay hidden" id="builder-sheet">
+  <div class="sheet sheet-wide">
+    <button class="sheet-close" id="builder-close">✕</button>
+    <div class="sheet-icon" id="builder-emoji">📁</div>
+    <h2 class="sheet-title" id="builder-name">Nueva colección</h2>
+    <p  class="sheet-sub"   id="builder-desc"></p>
+    <div class="builder-games" id="builder-games"></div>
+    <div class="sheet-actions">
+      <button class="btn-primary" id="builder-save">
+        <span class="btn-spinner hidden" id="builder-spinner"></span>
+        Crear en R36S
+      </button>
+      <button class="btn-ghost" id="builder-cancel">Cancelar</button>
+    </div>
+    <p class="sheet-error   hidden" id="builder-error"></p>
+    <p class="sheet-success hidden" id="builder-success"></p>
+  </div>
+</div>
+
+<!-- ── ADD ROM SHEET ───────────────────────────────────────── -->
+<div class="sheet-overlay hidden" id="add-rom-sheet">
+  <div class="sheet sheet-wide add-rom-sheet">
+    <button class="sheet-close" id="add-rom-close">✕</button>
+    <div class="sheet-icon">🎮</div>
+    <h2 class="sheet-title">Añadir ROM</h2>
+    <p class="sheet-sub">Arrastra archivos o usa el botón para seleccionarlos</p>
+
+    <!-- Selector de sistema -->
+    <label class="field field-full" style="margin-bottom:12px">
+      <span>Sistema destino</span>
+      <select id="add-rom-system" class="field-select"></select>
+    </label>
+
+    <!-- Zona drop -->
+    <div class="rom-dropzone" id="rom-dropzone">
+      <div class="rom-drop-icon">📂</div>
+      <p class="rom-drop-label">Arrastra archivos de ROM aquí</p>
+      <p class="rom-drop-sub">o</p>
+      <button class="btn-secondary" id="rom-pick-btn">Seleccionar archivos</button>
+      <input type="file" id="rom-file-input" multiple style="display:none" />
+    </div>
+
+    <!-- Lista de archivos pendientes -->
+    <div class="rom-pending-list hidden" id="rom-pending-list"></div>
+
+    <!-- Estado de subida con progreso -->
+    <div class="hidden" id="add-rom-status">
+      <div class="rom-upload-progress-wrap">
+        <div class="rom-upload-progress-header">
+          <span class="scrape-spinner"></span>
+          <span id="add-rom-status-msg">Subiendo…</span>
+          <span id="add-rom-progress-pct" class="rom-upload-pct">0%</span>
+        </div>
+        <div class="rom-progress-bar-track">
+          <div class="rom-progress-bar-fill" id="add-rom-progress-bar"></div>
+        </div>
+        <div class="rom-upload-progress-detail" id="add-rom-progress-detail"></div>
+      </div>
+    </div>
+
+    <div class="sheet-actions">
+      <button class="btn-primary" id="add-rom-upload-btn" disabled>
+        <span class="btn-spinner hidden" id="add-rom-spinner"></span>
+        ⬆ Subir a consola
+      </button>
+      <button class="btn-ghost" id="add-rom-cancel">Cancelar</button>
+    </div>
+    <p class="sheet-error hidden" id="add-rom-error"></p>
+
+    <!-- Panel de éxito con portada e info del juego -->
+    <div class="add-rom-result hidden" id="add-rom-result">
+      <div class="add-rom-result-header">
+        <span class="add-rom-result-check">✓</span>
+        <span id="add-rom-result-title">ROM subida correctamente</span>
+      </div>
+      <div id="add-rom-result-cards"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── ROM META EDITOR (editar info antes de subir) ───────── -->
+<div class="sheet-overlay hidden" id="rom-meta-sheet">
+  <div class="sheet sheet-wide rom-meta-sheet">
+    <button class="sheet-close" id="rom-meta-close">✕</button>
+    <h2 class="sheet-title">Editar información</h2>
+    <p class="sheet-sub" id="rom-meta-filename"></p>
+
+    <div class="rom-meta-layout">
+      <!-- Portada -->
+      <div class="rom-meta-cover">
+        <div class="rom-meta-img-wrap" id="rom-meta-img-wrap">
+          <img id="rom-meta-img" src="" alt="" class="hidden" />
+          <div class="rom-meta-no-img" id="rom-meta-no-img">🖼️</div>
+        </div>
+        <button class="btn-secondary btn-sm" id="rom-meta-scrape-btn">🔍 Buscar portada</button>
+        <button class="btn-secondary btn-sm" id="rom-meta-upload-img-btn">📁 Subir imagen</button>
+        <input type="file" id="rom-meta-img-input" accept="image/*" style="display:none" />
+        <div class="scrape-status hidden" id="rom-meta-scrape-status">
+          <span class="scrape-spinner"></span>
+          <span id="rom-meta-scrape-msg">Buscando…</span>
+        </div>
+        <!-- Mini grid portadas -->
+        <div class="scrape-options-grid hidden" id="rom-meta-scrape-grid" style="margin-top:8px;grid-template-columns:repeat(3,1fr)"></div>
+      </div>
+
+      <!-- Campos de texto -->
+      <div class="rom-meta-fields">
+        <label class="field field-full">
+          <span>Nombre del juego</span>
+          <input type="text" id="rom-meta-name" placeholder="Nombre…" autocomplete="off" />
+        </label>
+        <label class="field field-full">
+          <span>Descripción</span>
+          <textarea id="rom-meta-desc" rows="3" placeholder="Descripción…"></textarea>
+        </label>
+        <div class="form-grid">
+          <label class="field">
+            <span>Desarrollador</span>
+            <input type="text" id="rom-meta-developer" placeholder="Developer…" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Publisher</span>
+            <input type="text" id="rom-meta-publisher" placeholder="Publisher…" autocomplete="off" />
+          </label>
+          <label class="field field-sm">
+            <span>Año</span>
+            <input type="text" id="rom-meta-year" placeholder="2000" autocomplete="off" />
+          </label>
+          <label class="field field-sm">
+            <span>Género</span>
+            <input type="text" id="rom-meta-genre" placeholder="Action…" autocomplete="off" />
+          </label>
+          <label class="field field-sm">
+            <span>Rating (0-1)</span>
+            <input type="text" id="rom-meta-rating" placeholder="0.8" autocomplete="off" />
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="sheet-actions">
+      <button class="btn-primary" id="rom-meta-ok">✓ Confirmar</button>
+      <button class="btn-ghost" id="rom-meta-skip">Omitir</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── RECONNECT SHEET ───────────────────────────────────── -->
+<div class="sheet-overlay hidden" id="reconnect-sheet">
+  <div class="sheet" style="width:360px">
+    <div class="sheet-icon">📡</div>
+    <h2 class="sheet-title">Conexión SSH perdida</h2>
+    <p class="sheet-sub" id="reconnect-msg">Se perdió la conexión con la consola.</p>
+    <div class="sheet-actions">
+      <button class="btn-primary btn-full" id="reconnect-connect-btn">
+        <span class="btn-spinner hidden" id="reconnect-spinner"></span>
+        <span id="reconnect-connect-label">Conectar</span>
+      </button>
+      <button class="btn-ghost btn-full" id="reconnect-close-btn" style="margin-top:6px">Cerrar</button>
+    </div>
+    <p class="sheet-error hidden" id="reconnect-error"></p>
+  </div>
+</div>
+
+<!-- ── TOAST ─────────────────────────────────────────────── -->
+<div class="toast hidden" id="toast"></div>
+
+<!-- ── RESTART ES — esquina inferior derecha ─────────────── -->
+<button class="btn-restart-es" id="btn-restart-es" title="Reiniciar EmulationStation">⟳ ES</button>
+
+<script src="collection-engine.js"></script>
+<script src="renderer.js"></script>
+</body>
+</html>
