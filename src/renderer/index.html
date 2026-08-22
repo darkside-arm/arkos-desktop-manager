@@ -154,6 +154,12 @@
         <span class="nav-badge" id="badge-col">—</span>
       </button>
 
+      <!-- Uso de disco -->
+      <button class="nav-item" data-view="disk" id="nav-disk">
+        <span class="nav-icon">💾</span>
+        <span class="nav-label">Almacenamiento</span>
+      </button>
+
       <!-- Resultados de búsqueda (aparece en sidebar al hacer Enter) -->
       <div id="search-section" class="hidden">
         <div class="nav-section-label nav-section-search">
@@ -245,6 +251,18 @@
           <div class="sugg-empty">Haz clic en <strong>✦ Colecciones</strong> para analizar tu biblioteca.</div>
         </div>
       </div>
+    </div>
+
+    <!-- DISK USAGE VIEW -->
+    <div class="disk-view hidden" id="disk-view">
+      <div class="disk-header">
+        <h2>Uso de disco</h2>
+        <button class="disk-refresh" id="disk-refresh" title="Actualizar">↻</button>
+      </div>
+      <div class="sidebar-loading hidden" id="disk-loading">
+        <span class="spinner-sm"></span> Cargando…
+      </div>
+      <div class="disk-charts" id="disk-charts"></div>
     </div>
 
   </main>

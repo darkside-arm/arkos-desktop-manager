@@ -213,6 +213,33 @@ ipcMain.handle('ssh:list-systems', async () => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
+// ── IPC: Disk usage (df) ──────────────────────────────────────────────────────
+ipcMain.handle('ssh:disk-usage', async () => {
+  if (!sshConnected) return { ok: false, error: 'Not connected' };
+  try {
+    const r = await ssh.execCommand('df -B1 -P -T');
+    const lines = r.stdout.trim().split('\n').slice(1);
+    const seen = new Set();
+    const disks = [];
+    for (const line of lines) {
+      const m = line.trim().split(/\s+/);
+      if (m.length < 7) continue;
+      const [fs, type, size, used, avail, , mount] = m;
+      // Solo unidades relevantes: dispositivos de bloque reales
+      if (!/^\/dev\//.test(fs)) continue;
+      if (seen.has(fs)) continue;
+      seen.add(fs);
+      disks.push({
+        fs, type, mount,
+        size: parseInt(size, 10) || 0,
+        used: parseInt(used, 10) || 0,
+        avail: parseInt(avail, 10) || 0,
+      });
+    }
+    return { ok: true, disks };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 // ── IPC: Read gamelist.xml ────────────────────────────────────────────────────
 ipcMain.handle('ssh:read-gamelist', async (_, systemPath) => {
   if (!sshConnected) return { ok: false, error: 'Not connected' };

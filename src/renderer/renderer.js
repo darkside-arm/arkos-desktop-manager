@@ -559,6 +559,114 @@ function populateSidebar(systems, games) {
   });
 }
 
+// ═══════════════════════════════════════════════════════════
+// DISK USAGE (sidebar pie charts)
+// ═══════════════════════════════════════════════════════════
+function fmtBytes(b) {
+  if (!b && b !== 0) return '—';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return `${b.toFixed(b >= 10 || i === 0 ? 0 : 1)} ${u[i]}`;
+}
+
+// Gráfica de pie 3D estilo clásico (pastel)
+const DISK_COLORS = {
+  used:     '#a8dcab',   // verde pastel
+  usedDark: '#7db981',
+  free:     '#f7e8a6',   // amarillo pastel
+  freeDark: '#d9c67a',
+};
+
+function diskPieSvg(usedPct) {
+  const cx = 100, cy = 62, rx = 86, ry = 46, depth = 16;
+  const TAU = Math.PI * 2;
+  const frac = Math.min(Math.max(usedPct / 100, 0.0001), 0.9999);
+  // Porción "usado" centrada al frente (ángulo 90° = frente/abajo)
+  const mid = Math.PI / 2;
+  const a0 = mid - frac * Math.PI;           // inicio usado
+  const a1 = mid + frac * Math.PI;           // fin usado
+  const P = a => `${(cx + rx * Math.cos(a)).toFixed(2)},${(cy + ry * Math.sin(a)).toFixed(2)}`;
+
+  const topSlice = (s, e, fill) => {
+    const large = ((e - s) % TAU + TAU) % TAU > Math.PI ? 1 : 0;
+    return `<path d="M ${cx},${cy} L ${P(s)} A ${rx} ${ry} 0 ${large} 1 ${P(e)} Z" fill="${fill}"/>`;
+  };
+
+  // Pared lateral: solo la parte frontal (sin(a) > 0), por sub-arcos
+  const rim = (s, e, fill) => {
+    // recortar el arco [s,e] al rango frontal [0, π]
+    const segs = [];
+    let cs = s, ce = e;
+    if (ce < cs) ce += TAU;
+    for (let k = -1; k <= 1; k++) {
+      const lo = Math.max(cs, k * TAU + 0.001);
+      const hi = Math.min(ce, k * TAU + Math.PI - 0.001);
+      if (hi > lo) segs.push([lo, hi]);
+    }
+    return segs.map(([lo, hi]) => {
+      const large = hi - lo > Math.PI ? 1 : 0;
+      const [x1, y1] = [cx + rx * Math.cos(lo), cy + ry * Math.sin(lo)];
+      const [x2, y2] = [cx + rx * Math.cos(hi), cy + ry * Math.sin(hi)];
+      return `<path d="M ${x1.toFixed(2)},${y1.toFixed(2)}
+        A ${rx} ${ry} 0 ${large} 1 ${x2.toFixed(2)},${y2.toFixed(2)}
+        l 0 ${depth}
+        A ${rx} ${ry} 0 ${large} 0 ${x1.toFixed(2)},${(y1 + depth).toFixed(2)} Z" fill="${fill}"/>`;
+    }).join('');
+  };
+
+  return `
+    <svg viewBox="0 0 200 140" class="disk-pie" role="img">
+      ${rim(a1, a0 + TAU, DISK_COLORS.freeDark)}
+      ${rim(a0, a1, DISK_COLORS.usedDark)}
+      ${topSlice(a1, a0 + TAU, DISK_COLORS.free)}
+      ${topSlice(a0, a1, DISK_COLORS.used)}
+    </svg>`;
+}
+
+async function loadDiskUsage() {
+  const loading = $('disk-loading');
+  const charts = $('disk-charts');
+  if (!loading || !charts) return;
+  loading.classList.remove('hidden');
+  charts.innerHTML = '';
+  try {
+    const res = await window.r36s.diskUsage();
+    loading.classList.add('hidden');
+    if (!res.ok || !res.disks?.length) {
+      charts.innerHTML = `<div class="disk-empty">Sin datos de disco</div>`;
+      return;
+    }
+    charts.innerHTML = res.disks.map(d => {
+      const pct = d.size ? (d.used / d.size) * 100 : 0;
+      return `
+        <div class="disk-item" title="${esc(d.fs)}">
+          <div class="disk-item-head">
+            <div class="disk-mount">${esc(d.mount)}</div>
+            <div class="disk-fs">${esc(d.fs)} · ${esc(d.type || '?')}</div>
+          </div>
+          <div class="disk-chart-row">
+            ${diskPieSvg(pct)}
+            <div class="disk-legend">
+              <div class="disk-legend-item">
+                <span class="disk-swatch" style="background:${DISK_COLORS.used}"></span>
+                Usado · ${fmtBytes(d.used)} (${Math.round(pct)}%)
+              </div>
+              <div class="disk-legend-item">
+                <span class="disk-swatch" style="background:${DISK_COLORS.free}"></span>
+                Libre · ${fmtBytes(d.avail)}
+              </div>
+              <div class="disk-legend-total">Total: ${fmtBytes(d.size)}</div>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    loading.classList.add('hidden');
+    charts.innerHTML = `<div class="disk-empty">Error: ${esc(e.message)}</div>`;
+  }
+}
+
 function mapSystemGames(system, rawGames) {
   return rawGames.map(g => ({
     ...g,
@@ -1218,6 +1326,16 @@ function filteredGames() {
 }
 
 function renderGames() {
+  if (state.currentView === 'disk') {
+    $('games-container').classList.add('hidden');
+    $('collections-view').classList.add('hidden');
+    $('disk-view').classList.remove('hidden');
+    loadDiskUsage();
+    updateToolbar('Almacenamiento', '');
+    renderPaginator(0, 0, 0);
+    return;
+  }
+  $('disk-view').classList.add('hidden');
   if (state.currentView === 'collections') {
     $('games-container').classList.add('hidden');
     $('collections-view').classList.remove('hidden');
@@ -1432,6 +1550,8 @@ function selectView(view) {
 $('nav-all').addEventListener('click',         () => selectView('all'));
 $('nav-favorites').addEventListener('click',   () => selectView('favorites'));
 $('nav-collections').addEventListener('click', () => selectView('collections'));
+$('nav-disk').addEventListener('click',        () => selectView('disk'));
+$('disk-refresh').addEventListener('click',    () => loadDiskUsage());
 $('nav-search').addEventListener('click',      () => selectView('search'));
 $('btn-analyze').addEventListener('click',     () => { runSagaAnalysis(); selectView('collections'); });
 
@@ -2048,6 +2168,7 @@ function showLoading(msg) {
   $('content-loading').classList.remove('hidden');
   $('games-container').classList.add('hidden');
   $('collections-view').classList.add('hidden');
+  $('disk-view').classList.add('hidden');
   $('empty-state').classList.add('hidden');
   $('loading-msg').textContent = msg || 'Cargando…';
 }

@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('r36s', {
   uploadRom:        opts       => ipcRenderer.invoke('ssh:upload-rom', opts),
   restartES:        ()         => ipcRenderer.invoke('ssh:restart-es'),
   launchGame:       opts       => ipcRenderer.invoke('ssh:launch-game', opts),
+  diskUsage:        ()         => ipcRenderer.invoke('ssh:disk-usage'),
 
   // Caché de gamelists en disco
   cacheLoad:        host               => ipcRenderer.invoke('cache:load', host),

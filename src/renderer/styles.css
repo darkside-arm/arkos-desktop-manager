@@ -255,6 +255,47 @@ html, body {
 .sidebar-loading { padding: 14px 10px; color: var(--text2); font-size: 12px;
                    display: flex; align-items: center; gap: 8px; }
 
+/* ── Uso de disco (vista principal) ─────────────────────── */
+.disk-view { padding: 24px 28px; overflow-y: auto; flex: 1; }
+.disk-header {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 18px;
+}
+.disk-header h2 { font-size: 20px; font-weight: 700; color: var(--text); }
+.disk-refresh {
+  background: var(--input-bg); border: 1px solid var(--border);
+  color: var(--text2); border-radius: 8px; padding: 4px 10px;
+  font-size: 14px; cursor: pointer;
+}
+.disk-refresh:hover { color: var(--text); background: var(--surface); }
+.disk-charts {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+}
+.disk-item {
+  padding: 18px; border-radius: 12px;
+  background: var(--card-bg); border: 1px solid var(--border);
+}
+.disk-item-head { margin-bottom: 10px; }
+.disk-mount {
+  font-size: 15px; font-weight: 600; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.disk-fs { font-size: 11.5px; color: var(--text3); }
+.disk-chart-row { display: flex; align-items: center; gap: 18px; }
+.disk-pie { width: 200px; height: 140px; flex-shrink: 0;
+            filter: drop-shadow(0 3px 4px rgba(0,0,0,.15)); }
+.disk-legend { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.disk-legend-item {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12.5px; color: var(--text2);
+}
+.disk-swatch {
+  width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0;
+  border: 1px solid rgba(0,0,0,.15);
+}
+.disk-legend-total { font-size: 11.5px; color: var(--text3); margin-top: 2px; }
+.disk-empty { padding: 6px 10px; font-size: 12.5px; color: var(--text3); }
+
 .sidebar-footer {
   padding: 10px 14px;
   border-top: 1px solid var(--sidebar-b);
