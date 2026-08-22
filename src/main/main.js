@@ -380,6 +380,83 @@ else:
   }
 });
 
+// ── IPC: Delete game (ROM + media + entrada en gamelist.xml) ─────────────────
+ipcMain.handle('ssh:delete-game', async (_, { gamePath, systemPath, media }) => {
+  if (!sshConnected) return { ok: false, error: 'Not connected' };
+
+  const xmlPath = `${systemPath}/gamelist.xml`;
+  const pyScript = `
+import re, os, json
+
+xml_path  = ${JSON.stringify(xmlPath)}
+game_path = ${JSON.stringify(gamePath)}
+media     = ${JSON.stringify((media || []).filter(Boolean))}
+
+removed = []
+
+# 1. Borrar ROM
+if os.path.isfile(game_path):
+    os.remove(game_path)
+    removed.append(game_path)
+
+# 2. Borrar media asociada (imagen, video, marquee...)
+for m in media:
+    if os.path.isfile(m):
+        os.remove(m)
+        removed.append(m)
+
+# 3. Quitar el bloque <game> del gamelist.xml
+found = False
+try:
+    with open(xml_path, 'r', encoding='utf-8') as f:
+        xml = f.read()
+    blocks = re.split(r'(?=<game[\\s>])', xml)
+    result = []
+    game_basename = game_path.rstrip('/').split('/')[-1]
+    for block in blocks:
+        if block.strip().startswith('<game'):
+            path_match = re.search(r'<path>([^<]+)</path>', block)
+            if path_match:
+                p = path_match.group(1).strip()
+                if p == game_path or p.endswith('/' + game_basename) or p.endswith(game_basename):
+                    found = True
+                    # conservar lo que haya despues de </game> en este bloque
+                    tail = block.split('</game>', 1)
+                    if len(tail) == 2:
+                        result.append(tail[1])
+                    continue
+        result.append(block)
+    if found:
+        with open(xml_path, 'w', encoding='utf-8') as f:
+            f.write(''.join(result))
+except FileNotFoundError:
+    pass
+
+print(json.dumps({'ok': True, 'removed': removed, 'gamelist': found}))
+`;
+
+  const tmpLocal  = path.join(os.tmpdir(), `r36s_del_${Date.now()}.py`);
+  const tmpRemote = `/tmp/r36s_del_${Date.now()}.py`;
+
+  try {
+    fs.writeFileSync(tmpLocal, pyScript, 'utf8');
+    await ssh.putFile(tmpLocal, tmpRemote);
+    fs.unlinkSync(tmpLocal);
+
+    const r = await ssh.execCommand(`python3 "${tmpRemote}" ; rm -f "${tmpRemote}"`);
+    const out = r.stdout.trim();
+    try {
+      const parsed = JSON.parse(out);
+      return { ok: true, removed: parsed.removed, gamelist: parsed.gamelist };
+    } catch {
+      return { ok: false, error: r.stderr || out || 'Error desconocido' };
+    }
+  } catch (e) {
+    try { fs.unlinkSync(tmpLocal); } catch {}
+    return { ok: false, error: e.message };
+  }
+});
+
 
 ipcMain.handle('ssh:fetch-media', async (_, remotePath) => {
   if (!sshConnected) return { ok: false, error: 'Not connected' };

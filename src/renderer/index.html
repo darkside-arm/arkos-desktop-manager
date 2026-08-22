@@ -35,7 +35,15 @@
     <h2 class="sheet-title">R36S Manager</h2>
     <p class="sheet-sub">Selecciona una consola o añade una nueva</p>
 
-    <div class="saved-consoles" id="saved-consoles"></div>
+    <div class="saved-consoles hidden" id="saved-consoles">
+      <label class="field field-full">
+        <span>Consolas guardadas</span>
+        <div class="console-select-row">
+          <select id="console-select" class="console-select"></select>
+          <button class="console-edit-btn" id="console-edit" title="Editar conexión">✎</button>
+        </div>
+      </label>
+    </div>
 
     <div class="connect-divider hidden" id="connect-divider">
       <span>Nueva conexión</span>
@@ -100,9 +108,9 @@
       <input type="password" id="pass-input" placeholder="Introduce la contraseña…"
              autocomplete="current-password" />
     </label>
-    <label class="pass-remember">
+    <label class="pass-remember hidden">
       <input type="checkbox" id="pass-remember" checked />
-      <span>Recordar en esta sesión</span>
+      <span>Recordar contraseña</span>
     </label>
     <div class="sheet-actions">
       <button class="btn-primary btn-full" id="pass-ok">
@@ -288,7 +296,6 @@
     <div class="detail-meta-row"     id="detail-meta"></div>
     <div class="detail-rating-row">
       <div class="detail-rating" id="detail-rating"></div>
-      <button class="detail-play-btn" id="detail-play-btn" title="Lanzar juego en la consola">▶ Jugar</button>
     </div>
     <p   class="detail-desc"         id="detail-desc"></p>
     <div class="detail-info-grid"    id="detail-info"></div>
@@ -297,6 +304,7 @@
       <button class="btn-primary"              id="detail-fav-btn">♥ Favorito</button>
       <button class="btn-secondary"            id="detail-collection-btn">📁 Colección</button>
       <button class="btn-secondary btn-scrape" id="detail-scrape-btn">🔍 Scrape</button>
+      <button class="btn-secondary btn-delete" id="detail-delete-btn" title="Borrar ROM y media asociada">🗑 Borrar</button>
     </div>
 
     <!-- Estado scraping: buscando -->

@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('r36s', {
   restartES:        ()         => ipcRenderer.invoke('ssh:restart-es'),
   launchGame:       opts       => ipcRenderer.invoke('ssh:launch-game', opts),
   diskUsage:        ()         => ipcRenderer.invoke('ssh:disk-usage'),
+  deleteGame:       opts       => ipcRenderer.invoke('ssh:delete-game', opts),
 
   // Caché de gamelists en disco
   cacheLoad:        host               => ipcRenderer.invoke('cache:load', host),

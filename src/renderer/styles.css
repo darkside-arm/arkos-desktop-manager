@@ -695,6 +695,20 @@ html, body {
 }
 .btn-scrape:hover { background: var(--accent); color: #fff; border-color: transparent; }
 
+/* ── Botón borrar en detalle ──────────────────────────────── */
+.btn-delete {
+  white-space: nowrap;
+  border-color: rgba(255,69,58,.35);
+  color: var(--red);
+}
+.btn-delete:hover { background: var(--red); color: #fff; border-color: transparent; }
+.btn-delete-confirm {
+  background: var(--red) !important;
+  color: #fff !important;
+  border-color: transparent !important;
+}
+.btn-delete:disabled { opacity: .65; cursor: wait; }
+
 /* ── Estado de scraping ───────────────────────────────────── */
 .scrape-status {
   display: flex; align-items: center; gap: 8px;
@@ -1167,7 +1181,7 @@ body.has-paginator .btn-restart-es {
 
 .detail-panel {
   position: fixed; top: 52px; right: 0; bottom: 0;
-  width: 370px;
+  width: 570px;
   background: var(--detail-bg);
   border-left: 1px solid var(--border);
   z-index: 401;
@@ -1477,47 +1491,38 @@ body.has-paginator .btn-restart-es {
 }
 .connect-divider.hidden { display: none; }
 
-.saved-consoles { display: flex; flex-direction: column; gap: 5px; max-height: 210px; overflow-y: auto; }
-.saved-consoles::-webkit-scrollbar       { width: 3px; }
-.saved-consoles::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.saved-consoles { margin-bottom: 4px; }
+.saved-consoles.hidden { display: none; }
 
-.console-row {
-  display: flex; align-items: center; gap: 10px;
+/* Combobox de consolas guardadas */
+.console-select-row { display: flex; align-items: center; gap: 6px; }
+.console-select {
+  flex: 1; min-width: 0;
   padding: 9px 11px;
   background: var(--input-bg);
   border: 1px solid var(--border);
-  border-radius: 10px; cursor: pointer;
-  transition: background .12s, border-color .12s, transform .12s;
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%23888' stroke-width='1.5' fill='none' stroke-linecap='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+  padding-right: 30px;
 }
-.console-row:hover { background: var(--surface2); border-color: var(--accent); transform: translateX(2px); }
-.console-row-icon  { font-size: 20px; flex-shrink: 0; }
-.console-row-info  { flex: 1; min-width: 0; }
-.console-row-name  { font-size: 13px; font-weight: 600;
-                     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.console-row-host  { font-size: 10.5px; color: var(--text2); font-family: monospace;
-                     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.console-select:focus { outline: none; border-color: var(--accent); }
+.console-select option { background: var(--surface); color: var(--text); }
 
-/* Botón editar (lápiz) */
-.console-row-edit {
-  background: none; border: none; cursor: pointer;
-  color: var(--text3); font-size: 14px;
-  width: 28px; height: 28px; border-radius: 7px;
-  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-  transition: background .12s, color .12s;
-  opacity: 0;
+.console-edit-btn {
+  background: var(--input-bg); border: 1px solid var(--border);
+  cursor: pointer; color: var(--text3); font-size: 14px;
+  width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .12s, color .12s, border-color .12s;
 }
-.console-row:hover .console-row-edit { opacity: 1; }
-.console-row-edit:hover { background: var(--accent-dim); color: var(--accent); }
-
-/* Fila resaltada cuando está siendo editada */
-.console-row-editing {
-  border-color: var(--accent) !important;
-  background: var(--accent-dim) !important;
-}
-.console-row-editing .console-row-edit {
-  opacity: 1;
-  color: var(--accent);
-}
+.console-edit-btn:hover { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
 
 .autoreconnect {
   display: flex; align-items: center; gap: 8px;

@@ -143,12 +143,14 @@ function showToast(msg, ms = 2800) {
 // CONNECT SHEET
 // ═══════════════════════════════════════════════════════════
 
-// Contraseñas en sessionStorage (se borran al cerrar la app, nunca van a disco)
+// Contraseñas guardadas de forma persistente (localStorage)
 const SESSION_PASS_PFX = 'r36s_sp_';
 const sessionPass = {
-  get: id      => sessionStorage.getItem(SESSION_PASS_PFX + id) || '',
-  set: (id, p) => sessionStorage.setItem(SESSION_PASS_PFX + id, p),
-  del: id      => sessionStorage.removeItem(SESSION_PASS_PFX + id),
+  get: id      => localStorage.getItem(SESSION_PASS_PFX + id)
+                  || sessionStorage.getItem(SESSION_PASS_PFX + id) || '',
+  set: (id, p) => localStorage.setItem(SESSION_PASS_PFX + id, p),
+  del: id      => { localStorage.removeItem(SESSION_PASS_PFX + id);
+                    sessionStorage.removeItem(SESSION_PASS_PFX + id); },
 };
 
 let reconnectShown = false;
@@ -235,43 +237,58 @@ let editingConsoleId = null;
 
 function renderSavedConsoles() {
   const consoles = loadConsoles();
-  const container = $('saved-consoles');
-  const divider   = $('connect-divider');
-  container.innerHTML = '';
+  const wrap    = $('saved-consoles');
+  const divider = $('connect-divider');
+  const sel     = $('console-select');
 
-  if (!consoles.length) { divider.classList.add('hidden'); return; }
-  divider.classList.remove('hidden');
+  if (!consoles.length) {
+    wrap.classList.add('hidden');
+    divider.classList.add('hidden');
+    $('connect-form').classList.remove('hidden');
+    return;
+  }
 
+  wrap.classList.remove('hidden');
+  sel.innerHTML = '';
   consoles.forEach(c => {
-    const hasSavedPass = !!sessionPass.get(c.id);
-    const row = document.createElement('div');
-    row.className = 'console-row' + (editingConsoleId === c.id ? ' console-row-editing' : '');
-    row.dataset.id = c.id;
-    row.innerHTML = `
-      <div class="console-row-icon">${sysEmoji(c.name)}</div>
-      <div class="console-row-info">
-        <div class="console-row-name">${esc(c.name)}</div>
-        <div class="console-row-host">${esc(c.username)}@${esc(c.host)}:${c.port}
-          ${hasSavedPass ? '<span class="pass-dot" title="Contrasena en sesion">&#x25CF;</span>' : ''}
-        </div>
-      </div>
-      <button class="console-row-edit" title="Editar">&#x270E;</button>
-    `;
-
-    row.addEventListener('click', e => {
-      if (e.target.classList.contains('console-row-edit')) return;
-      clearEdit();
-      connectSaved(c);
-    });
-
-    row.querySelector('.console-row-edit').addEventListener('click', e => {
-      e.stopPropagation();
-      loadConsoleIntoForm(c);
-    });
-
-    container.appendChild(row);
+    const o = document.createElement('option');
+    o.value = c.id;
+    o.textContent = `${sysEmoji(c.name)} ${c.name} — ${c.username}@${c.host}:${c.port}`;
+    sel.appendChild(o);
   });
+  const oNew = document.createElement('option');
+  oNew.value = '__new__';
+  oNew.textContent = '➕ Nueva conexión…';
+  sel.appendChild(oNew);
+
+  const lastId = loadLastId();
+  sel.value = consoles.some(c => c.id === (editingConsoleId || lastId))
+    ? (editingConsoleId || lastId) : consoles[0].id;
+  updateConnectFormVisibility();
 }
+
+function selectedConsole() {
+  const v = $('console-select').value;
+  if (v === '__new__') return null;
+  return loadConsoles().find(c => c.id === v) || null;
+}
+
+function updateConnectFormVisibility() {
+  const hasSaved = !$('saved-consoles').classList.contains('hidden');
+  const showForm = !hasSaved || !selectedConsole() || !!editingConsoleId;
+  $('connect-form').classList.toggle('hidden', !showForm);
+  $('connect-divider').classList.toggle('hidden', !(hasSaved && showForm));
+}
+
+$('console-select').addEventListener('change', () => {
+  clearEdit();
+  updateConnectFormVisibility();
+});
+
+$('console-edit').addEventListener('click', () => {
+  const c = selectedConsole();
+  if (c) loadConsoleIntoForm(c);
+});
 
 // Conectar desde consola guardada: si hay contraseña en sesión → directo, si no → pedir
 function connectSaved(c) {
@@ -311,7 +328,6 @@ $('pass-input').addEventListener('keydown', e => {
 $('pass-ok').addEventListener('click', async () => {
   if (!passPromptConsole) return;
   const pass = $('pass-input').value;
-  const remember = $('pass-remember').checked;
 
   setPassLoading(true);
   const c = { ...passPromptConsole, password: pass };
@@ -328,7 +344,7 @@ $('pass-ok').addEventListener('click', async () => {
     return;
   }
 
-  if (remember) sessionPass.set(c.id, pass);
+  sessionPass.set(c.id, pass);   // guardar siempre la contraseña
 
   hidePassPrompt();
   state.currentConsole = c;
@@ -381,6 +397,12 @@ async function tryAutoReconnect() {
 $('btn-cancel-auto').addEventListener('click', () => $('autoreconnect').classList.add('hidden'));
 
 $('btn-connect').addEventListener('click', () => {
+  // Si hay una consola seleccionada en el combobox y el formulario está oculto → conectar directo
+  const saved = selectedConsole();
+  if (saved && $('connect-form').classList.contains('hidden')) {
+    connectSaved(saved);
+    return;
+  }
   const host = $('ssh-host').value.trim();
   if (!host) { showConnectError('Introduce la IP de la consola'); return; }
   const c = {
@@ -1611,7 +1633,6 @@ function openDetail(game) {
   const mediaEl = $('detail-media');
   const vid     = $('detail-video');
   const img     = $('detail-img');
-  const playBtn = $('detail-play-btn');
 
   // Reset completo
   vid.pause?.(); vid.src = ''; vid.classList.add('hidden');
@@ -1620,6 +1641,7 @@ function openDetail(game) {
   $('detail-no-media').classList.add('hidden');
   $('detail-retry-btn').classList.add('hidden');
   $('detail-video-btn').classList.add('hidden');
+  resetDeleteBtn();
 
   // Info
   $('detail-system').textContent = game.system || '—';
@@ -1630,16 +1652,6 @@ function openDetail(game) {
 
   const r = parseFloat(game.rating || 0);
   $('detail-rating').textContent = r ? '★'.repeat(Math.round(r * 5)) + '☆'.repeat(5 - Math.round(r * 5)) : '';
-
-  if (game.path) {
-    playBtn.classList.remove('hidden');
-    playBtn.disabled = false;
-    playBtn.textContent = '▶ Jugar';
-    playBtn.onclick = () => launchGameFromDetail(game);
-  } else {
-    playBtn.classList.add('hidden');
-    playBtn.onclick = null;
-  }
 
   $('detail-desc').textContent = game.desc || 'Sin descripción disponible.';
 
@@ -1725,39 +1737,72 @@ function playDetailVideo(game) {
   });
 }
 
-async function launchGameFromDetail(game) {
-  if (!game?.path) {
-    showToast('⚠ Este juego no tiene ruta ROM');
+// ── Borrar juego (ROM + media + entrada en gamelist) ────────
+let deleteConfirmTimer = null;
+
+$('detail-delete-btn').addEventListener('click', async () => {
+  const game = detailCurrentGame;
+  if (!game?.path) { showToast('⚠ Este juego no tiene ruta ROM'); return; }
+  const btn = $('detail-delete-btn');
+
+  // Confirmación en dos pasos sobre el mismo botón
+  if (!btn.dataset.confirm) {
+    btn.dataset.confirm = '1';
+    btn.textContent = '⚠ ¿Seguro?';
+    btn.classList.add('btn-delete-confirm');
+    deleteConfirmTimer = setTimeout(() => resetDeleteBtn(), 3500);
     return;
   }
+  clearTimeout(deleteConfirmTimer);
+  resetDeleteBtn();
 
-  const btn = $('detail-play-btn');
   btn.disabled = true;
-  btn.textContent = '⏳ Lanzando…';
-
+  btn.textContent = '⏳ Borrando…';
   try {
-    const res = await window.r36s.launchGame({
-      romPath: game.path,
-      system: game.system,
+    const res = await window.r36s.deleteGame({
+      gamePath:   game.path,
+      systemPath: game.systemPath,
+      media:      [game.image, game.video, game.marquee, game.thumbnail],
     });
-
-    if (!res.ok && handleSshError(res.error, 'Not connected')) {
+    if (!res.ok) {
+      if (!handleSshError(res.error, 'Not connected')) showToast('❌ ' + (res.error || 'Error al borrar'));
       return;
     }
 
-    if (res.ok) {
-      showToast(`▶ Lanzado en consola (${res.method || 'ok'})`, 3000);
-      closeDetail();
-      return;
-    }
+    // Actualizar estado local
+    state.allGames = state.allGames.filter(g => g.path !== game.path);
+    state.favorites.delete(game.path);
+    localStorage.setItem(STORE_FAVS, JSON.stringify([...state.favorites]));
 
-    showToast(`❌ No se pudo lanzar: ${res.error || 'error desconocido'}`, 4200);
+    // Actualizar caché en disco
+    try {
+      const cached = await window.r36s.cacheLoad(state.currentConsole.host);
+      if (cached?.games) {
+        const games = cached.games.filter(g => g.path !== game.path);
+        const systems = (cached.systems || []).map(s =>
+          s.name === game.system ? { ...s, count: Math.max(0, (s.count || 1) - 1) } : s);
+        await window.r36s.cacheSave(state.currentConsole.host, systems, games);
+      }
+    } catch {}
+
+    populateSidebar(state.systems, state.allGames);
+    updateBadges();
+    closeDetail();
+    renderGames();
+    showToast(`🗑 Borrado: ${game.name || game.path} (${(res.removed || []).length} archivos)`);
   } catch (e) {
-    showToast(`❌ Error lanzando juego: ${e.message || String(e)}`, 4200);
+    showToast('❌ Error borrando: ' + (e.message || String(e)), 4200);
   } finally {
     btn.disabled = false;
-    btn.textContent = '▶ Jugar';
+    resetDeleteBtn();
   }
+});
+
+function resetDeleteBtn() {
+  const btn = $('detail-delete-btn');
+  delete btn.dataset.confirm;
+  btn.textContent = '🗑 Borrar';
+  btn.classList.remove('btn-delete-confirm');
 }
 
 $('detail-close').addEventListener('click',   closeDetail);
