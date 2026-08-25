@@ -396,6 +396,25 @@ html, body {
 .btn-action:hover { background: var(--input-bg); }
 .btn-action:active { transform: scale(.97); }
 
+/* ── Botón de filtros arcade ─────────────────────────────── */
+#btn-arcade-filter.filters-active {
+  background: var(--accent); color: #fff; border-color: var(--accent);
+}
+#btn-arcade-filter.filters-active:hover { background: var(--accent-hover); }
+.filter-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 16px; height: 16px; margin-left: 6px; padding: 0 4px;
+  border-radius: 8px; font-size: 10px; font-weight: 700;
+  background: rgba(255,255,255,.3); color: #fff;
+}
+.filter-count.hidden { display: none; }
+.af-check {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text); cursor: pointer;
+  margin: 4px 0 6px;
+}
+.af-check input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+
 /* ── Menú ... del sidebar por sistema ────────────────────── */
 .sys-dots-wrap {
   position: relative;

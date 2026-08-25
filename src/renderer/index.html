@@ -214,6 +214,9 @@
       </div>
 
       <div class="toolbar-right">
+        <button class="btn-action hidden" id="btn-arcade-filter" title="Filtros arcade">
+          ⛛ Filtros<span class="filter-count hidden" id="arcade-filter-count"></span>
+        </button>
         <div class="segmented" id="view-toggle">
           <button class="seg-btn active" data-layout="grid" title="Cuadrícula">⊞</button>
           <button class="seg-btn" data-layout="list" title="Lista">☰</button>
@@ -418,6 +421,38 @@
         <span id="add-rom-result-title">ROM subida correctamente</span>
       </div>
       <div id="add-rom-result-cards"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── ARCADE FILTER SHEET ─────────────────────────────────── -->
+<div class="sheet-overlay hidden" id="arcade-filter-sheet">
+  <div class="sheet">
+    <button class="sheet-close" id="arcade-filter-close">✕</button>
+    <div class="sheet-icon">⛛</div>
+    <h2 class="sheet-title">Filtros arcade</h2>
+    <p class="sheet-sub" id="arcade-filter-sub">Filtra los juegos del sistema</p>
+
+    <label class="field field-full" style="margin-bottom:10px">
+      <span>Género</span>
+      <select id="af-genre" class="field-select"><option value="">Todos</option></select>
+    </label>
+    <label class="field field-full" style="margin-bottom:10px">
+      <span>Año</span>
+      <select id="af-year" class="field-select"><option value="">Todos</option></select>
+    </label>
+    <label class="field field-full" style="margin-bottom:10px">
+      <span>Fabricante</span>
+      <select id="af-manufacturer" class="field-select"><option value="">Todos</option></select>
+    </label>
+    <label class="af-check">
+      <input type="checkbox" id="af-hide-clones" />
+      <span>Ocultar clones (sets alternativos, bootlegs, revisiones)</span>
+    </label>
+
+    <div class="sheet-actions">
+      <button class="btn-primary" id="arcade-filter-apply">Aplicar</button>
+      <button class="btn-ghost" id="arcade-filter-clear">Limpiar filtros</button>
     </div>
   </div>
 </div>

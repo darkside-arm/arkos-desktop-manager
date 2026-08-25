@@ -63,6 +63,54 @@ function sysEmoji(name) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// ARCADE / MAME DETECTION + FILTROS
+// ═══════════════════════════════════════════════════════════
+const ARCADE_KEYS = ['arcade', 'mame', 'fba', 'fbneo', 'neogeo', 'cps', 'naomi', 'atomiswave', 'pgm', 'daphne'];
+function isArcadeSystem(name) {
+  const k = (name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return ARCADE_KEYS.some(key => k.includes(key));
+}
+
+state.arcadeFilters = { genre: '', year: '', manufacturer: '', hideClones: false };
+
+function arcadeFilterCount() {
+  const f = state.arcadeFilters;
+  return (f.genre ? 1 : 0) + (f.year ? 1 : 0) + (f.manufacturer ? 1 : 0) + (f.hideClones ? 1 : 0);
+}
+
+// Heurística de clones: sin datos parent/clone en gamelist.xml,
+// se marcan como clon los nombres con sufijos típicos de sets alternativos
+const CLONE_RE = /\((?:[^)]*\b(?:set\s*[2-9]|bootleg|clone|prototype|rev(?:ision)?\s*[b-z2-9]|alt(?:ernate)?|hack|earlier|older|newer version)\b[^)]*)\)/i;
+function baseTitle(name) {
+  return (name || '').replace(/\([^)]*\)/g, '').replace(/\[[^\]]*\]/g, '').trim().toLowerCase();
+}
+
+// Año de un juego: gamelist.xml usa <releasedate> (ej. "19910101T000000"); year es fallback
+function gameYear(g) {
+  const y = String(g.releasedate || '').slice(0, 4) || String(g.year || '').slice(0, 4);
+  return /^\d{4}$/.test(y) ? y : '';
+}
+
+function applyArcadeFilters(list) {
+  const f = state.arcadeFilters;
+  if (f.genre)        list = list.filter(g => (g.genre || '') === f.genre);
+  if (f.year)         list = list.filter(g => gameYear(g) === f.year);
+  if (f.manufacturer) list = list.filter(g => (g.developer || g.publisher || '') === f.manufacturer);
+  if (f.hideClones) {
+    const seen = new Set();
+    list = list.filter(g => {
+      if (CLONE_RE.test(g.name || '')) return false;
+      const base = baseTitle(g.name);
+      if (!base) return true;
+      if (seen.has(base)) return false;
+      seen.add(base);
+      return true;
+    });
+  }
+  return list;
+}
+
+// ═══════════════════════════════════════════════════════════
 // DOM
 // ═══════════════════════════════════════════════════════════
 const $ = id => document.getElementById(id);
@@ -1343,6 +1391,7 @@ function filteredGames() {
     list = state.searchResults;
   } else if (state.currentView !== 'all' && state.currentView !== 'collections') {
     list = list.filter(g => g.system === state.currentView);
+    if (isArcadeSystem(state.currentView)) list = applyArcadeFilters(list);
   }
   return list;
 }
@@ -1566,8 +1615,79 @@ function selectView(view) {
     el.classList.toggle('active',
       el.dataset.view === view || el.dataset.system === view);
   });
+  updateArcadeFilterBtn();
   renderGames();
 }
+
+// ═══════════════════════════════════════════════════════════
+// ARCADE FILTER SHEET
+// ═══════════════════════════════════════════════════════════
+function updateArcadeFilterBtn() {
+  const btn = $('btn-arcade-filter');
+  const isArcadeView = isArcadeSystem(state.currentView) &&
+    state.systems.some(s => s.name === state.currentView);
+  btn.classList.toggle('hidden', !isArcadeView);
+
+  const n = arcadeFilterCount();
+  btn.classList.toggle('filters-active', n > 0);
+  const badge = $('arcade-filter-count');
+  badge.textContent = n;
+  badge.classList.toggle('hidden', n === 0);
+}
+
+function openArcadeFilterSheet() {
+  const games = state.allGames.filter(g => g.system === state.currentView);
+  const f = state.arcadeFilters;
+
+  $('arcade-filter-sub').textContent =
+    `Sistema: ${sysEmoji(state.currentView)} ${state.currentView} · ${games.length} juegos`;
+
+  const uniqSorted = arr => [...new Set(arr.filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
+  const fill = (id, values, current) => {
+    const sel = $(id);
+    sel.innerHTML = '<option value="">Todos</option>';
+    values.forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v; opt.textContent = v;
+      if (v === current) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  };
+
+  fill('af-genre',        uniqSorted(games.map(g => g.genre)), f.genre);
+  fill('af-year',         uniqSorted(games.map(gameYear)), f.year);
+  fill('af-manufacturer', uniqSorted(games.map(g => g.developer || g.publisher)), f.manufacturer);
+  $('af-hide-clones').checked = f.hideClones;
+
+  $('arcade-filter-sheet').classList.remove('hidden');
+}
+
+$('btn-arcade-filter').addEventListener('click', openArcadeFilterSheet);
+$('arcade-filter-close').addEventListener('click', () => $('arcade-filter-sheet').classList.add('hidden'));
+
+$('arcade-filter-apply').addEventListener('click', () => {
+  state.arcadeFilters = {
+    genre:        $('af-genre').value,
+    year:         $('af-year').value,
+    manufacturer: $('af-manufacturer').value,
+    hideClones:   $('af-hide-clones').checked,
+  };
+  $('arcade-filter-sheet').classList.add('hidden');
+  state.page = 0;
+  updateArcadeFilterBtn();
+  renderGames();
+  const n = arcadeFilterCount();
+  showToast(n ? `⛛ ${n} filtro${n !== 1 ? 's' : ''} aplicado${n !== 1 ? 's' : ''}` : '⛛ Sin filtros');
+});
+
+$('arcade-filter-clear').addEventListener('click', () => {
+  state.arcadeFilters = { genre: '', year: '', manufacturer: '', hideClones: false };
+  $('arcade-filter-sheet').classList.add('hidden');
+  state.page = 0;
+  updateArcadeFilterBtn();
+  renderGames();
+  showToast('✓ Filtros limpiados');
+});
 
 $('nav-all').addEventListener('click',         () => selectView('all'));
 $('nav-favorites').addEventListener('click',   () => selectView('favorites'));
