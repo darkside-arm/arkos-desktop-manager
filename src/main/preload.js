@@ -27,6 +27,9 @@ contextBridge.exposeInMainWorld('r36s', {
   settingsLoad:     ()    => ipcRenderer.invoke('settings:load'),
   settingsSave:     obj   => ipcRenderer.invoke('settings:save', obj),
 
+  // IA — Sugerencias de colecciones (DeepSeek)
+  aiSuggestCollections: opts => ipcRenderer.invoke('ai:suggest-collections', opts),
+
   // Scraper (ScreenScraper.fr)
   scrapeGame:       opts  => ipcRenderer.invoke('scraper:scrape-game', opts),
   scrapeFetch:      opts  => ipcRenderer.invoke('scraper:fetch', opts),

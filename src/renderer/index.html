@@ -256,7 +256,13 @@
       <div class="col-suggestions">
         <div class="col-sugg-header">
           <h3>✦ Sugerencias inteligentes</h3>
-          <p>Detectadas automáticamente por nombre de saga</p>
+          <p>Generadas con IA (DeepSeek) a partir de los ROMs de cada sistema</p>
+        </div>
+        <div class="col-token">
+          <span class="col-token-label">🔑 Token DeepSeek</span>
+          <input type="password" id="deepseek-token-input" class="col-token-input" placeholder="sk-… (sin token: solo análisis local por regex)" spellcheck="false">
+          <button class="btn-action" id="deepseek-token-save">Guardar</button>
+          <span class="col-token-status" id="deepseek-token-status"></span>
         </div>
         <div class="sugg-cards" id="sugg-cards">
           <div class="sugg-empty">Haz clic en <strong>✦ Colecciones</strong> para analizar tu biblioteca.</div>

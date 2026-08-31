@@ -886,6 +886,110 @@ function saveSettings(obj) {
 ipcMain.handle('settings:load', () => loadSettings());
 ipcMain.handle('settings:save', (_, obj) => { saveSettings({ ...loadSettings(), ...obj }); return { ok: true }; });
 
+// ═════════════════════════════════════════════════════════════════════════════
+// IA — Sugerencias de colecciones via DeepSeek (SDK OpenAI)
+// ═════════════════════════════════════════════════════════════════════════════
+const OpenAI = require('openai');
+
+const DEEPSEEK_MODEL = 'deepseek-v4-flash';
+
+async function deepseekChat(apiKey, messages) {
+  const client = new OpenAI({
+    baseURL: 'https://api.deepseek.com',
+    apiKey,
+    timeout: 120000,
+  });
+
+  console.log(`[deepseek] → modelo=${DEEPSEEK_MODEL} mensajes=${messages.length} chars=${messages.reduce((n, m) => n + m.content.length, 0)}`);
+  const t0 = Date.now();
+
+  try {
+    const completion = await client.chat.completions.create({
+      model: DEEPSEEK_MODEL,
+      messages,
+      temperature: 0.4,
+      max_tokens: 8000,   // v4-flash razona internamente y consume tokens antes de responder
+      response_format: { type: 'json_object' },
+      stream: false,
+    });
+
+    const ms = Date.now() - t0;
+    const content = completion.choices?.[0]?.message?.content || '';
+    console.log(`[deepseek] ← ok en ${ms}ms | finish=${completion.choices?.[0]?.finish_reason} | tokens=${JSON.stringify(completion.usage || {})}`);
+    console.log(`[deepseek] ← contenido (${content.length} chars): ${content.slice(0, 500)}${content.length > 500 ? '…' : ''}`);
+    return content;
+  } catch (e) {
+    const ms = Date.now() - t0;
+    console.error(`[deepseek] ✗ error en ${ms}ms:`, e.status || '', e.message);
+    if (e.error) console.error('[deepseek] ✗ detalle API:', JSON.stringify(e.error).slice(0, 500));
+    throw new Error(`DeepSeek${e.status ? ' HTTP ' + e.status : ''}: ${e.message}`);
+  }
+}
+
+// games: [{ name, system }] — se envían indexados y DeepSeek devuelve índices
+ipcMain.handle('ai:suggest-collections', async (_, { games }) => {
+  try {
+    if (!Array.isArray(games) || !games.length) {
+      return { ok: false, error: 'No hay juegos cargados' };
+    }
+    const apiKey = (loadSettings().deepseekApiKey || '').trim();
+    if (!apiKey) {
+      console.warn('[deepseek] Sin token configurado — se omite la IA');
+      return { ok: false, noToken: true, error: 'Sin token de DeepSeek configurado' };
+    }
+
+    // Limitar para no exceder el contexto (nombres cortos, ~1 línea por juego)
+    const MAX_GAMES = 1500;
+    const list = games.slice(0, MAX_GAMES);
+    console.log(`[deepseek] Analizando ${list.length} juegos (de ${games.length} totales)`);
+    const inventory = list.map((g, i) => `${i}|${g.system}|${g.name}`).join('\n');
+
+    const system = [
+      'Eres un experto en videojuegos retro y curación de bibliotecas de ROMs para EmulationStation.',
+      'Recibirás un inventario de ROMs con formato "indice|sistema|nombre", una línea por juego.',
+      'Tu tarea: proponer colecciones temáticas atractivas (sagas, géneros, compañías, épocas, crossovers).',
+      'Reglas:',
+      '- Cada colección debe tener al menos 2 juegos del inventario.',
+      '- Usa SOLO los índices del inventario; nunca inventes juegos.',
+      '- Propón entre 5 y 15 colecciones, ordenadas de mejor a peor.',
+      '- label corto (máx 30 caracteres), description en español (máx 80 caracteres), emoji un solo emoji representativo.',
+      'Responde ÚNICAMENTE con JSON válido con esta forma exacta:',
+      '{"collections":[{"label":"...","emoji":"...","description":"...","gameIndices":[0,5,12]}]}',
+    ].join('\n');
+
+    const user = `Inventario de ROMs (${list.length} juegos):\n${inventory}`;
+
+    const content = await deepseekChat(apiKey, [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ]);
+
+    let parsed;
+    try { parsed = JSON.parse(content); }
+    catch {
+      const m = content.match(/\{[\s\S]*\}/);
+      if (!m) throw new Error('DeepSeek no devolvió JSON');
+      parsed = JSON.parse(m[0]);
+    }
+
+    const collections = (parsed.collections || [])
+      .map(c => ({
+        label: String(c.label || '').slice(0, 60),
+        emoji: String(c.emoji || '✦').slice(0, 4),
+        description: String(c.description || '').slice(0, 120),
+        gameIndices: (Array.isArray(c.gameIndices) ? c.gameIndices : [])
+          .filter(i => Number.isInteger(i) && i >= 0 && i < list.length),
+      }))
+      .filter(c => c.label && c.gameIndices.length >= 2);
+
+    console.log(`[deepseek] ${collections.length} colecciones válidas: ${collections.map(c => `${c.label}(${c.gameIndices.length})`).join(', ')}`);
+    return { ok: true, collections };
+  } catch (e) {
+    console.error('[deepseek] ai:suggest-collections falló:', e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
 // ── IPC: Save temp file (para upload de ROMs desde renderer) ─────────────────
 ipcMain.handle('app:save-temp-file', (_, { name, buffer }) => {
   try {

@@ -1574,6 +1574,18 @@ body.has-paginator .btn-restart-es {
 .col-no-items   { color: var(--text2); font-size: 12px; padding: 10px 0; }
 .col-suggestions  { margin-top: 4px; }
 .col-sugg-header  { margin-bottom: 13px; }
+.col-token {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 14px; flex-wrap: wrap;
+}
+.col-token-label { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.col-token-input {
+  flex: 1; min-width: 220px; max-width: 420px;
+  padding: 6px 10px; font-size: 12px;
+  border: 1px solid var(--border, #444); border-radius: 6px;
+  background: var(--bg2, transparent); color: inherit;
+}
+.col-token-status { font-size: 11px; color: var(--text2); }
 .col-sugg-header h3 { font-size: 14px; font-weight: 600; }
 .col-sugg-header p  { font-size: 12px; color: var(--text2); margin-top: 3px; }
 .sugg-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px,1fr)); gap: 11px; }

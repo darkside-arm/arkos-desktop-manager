@@ -2032,6 +2032,7 @@ function updateFavBtn(isFav) {
 // COLLECTIONS
 // ═══════════════════════════════════════════════════════════
 async function renderCollectionsView() {
+  refreshTokenUI();
   const res = await window.r36s.listCollections();
   if (!res.ok && handleSshError(res.error, 'Not connected')) return;
   const cl  = $('col-list');
@@ -2054,15 +2055,102 @@ async function renderCollectionsView() {
   if (state.suggestions.length) renderSuggestions();
 }
 
-function runSagaAnalysis() {
-  state.suggestions = analyzeSagas(state.allGames);
+let sagaAnalysisRunning = false;
+
+// ── Token DeepSeek ──────────────────────────────────────────
+async function getDeepseekToken() {
+  try {
+    const s = await window.r36s.settingsLoad();
+    return (s?.deepseekApiKey || '').trim();
+  } catch { return ''; }
+}
+
+async function refreshTokenUI() {
+  const token = await getDeepseekToken();
+  const status = $('deepseek-token-status');
+  const input  = $('deepseek-token-input');
+  if (token) {
+    if (input && !input.value) input.placeholder = '••••••••' + token.slice(-4) + ' (configurado)';
+    if (status) status.textContent = '✓ Token configurado — IA + regex';
+  } else {
+    if (input) input.placeholder = 'sk-… (sin token: solo análisis local por regex)';
+    if (status) status.textContent = 'Sin token — solo análisis por expresiones regulares';
+  }
+}
+
+$('deepseek-token-save').addEventListener('click', async () => {
+  const input = $('deepseek-token-input');
+  const val = input.value.trim();
+  await window.r36s.settingsSave({ deepseekApiKey: val });
+  input.value = '';
+  await refreshTokenUI();
+  showToast(val ? '🔑 Token DeepSeek guardado' : '🔑 Token DeepSeek eliminado');
+});
+
+async function runSagaAnalysis() {
+  if (sagaAnalysisRunning) return;
+  sagaAnalysisRunning = true;
+  state.suggestions = [];
+
+  const hasToken = !!(await getDeepseekToken());
+  const sc = $('sugg-cards');
+  if (sc) {
+    sc.innerHTML = hasToken
+      ? '<div class="sugg-empty"><span class="spinner-sm"></span> Analizando tu biblioteca con IA (DeepSeek)…</div>'
+      : '<div class="sugg-empty"><span class="spinner-sm"></span> Analizando por expresiones regulares…</div>';
+  }
+
+  try {
+    let aiSuggestions = [];
+
+    if (hasToken) {
+      const games = state.allGames.map(g => ({
+        name: g.name || (g.path || '').split('/').pop(),
+        system: g.system || '?',
+      }));
+      const res = await window.r36s.aiSuggestCollections({ games });
+
+      if (res.ok && res.collections?.length) {
+        aiSuggestions = res.collections.map(c => {
+          const matches = c.gameIndices.map(i => state.allGames[i]).filter(Boolean);
+          return {
+            saga: { id: 'ai_' + c.label.toLowerCase().replace(/[^a-z0-9]+/g, '_'), label: c.label, emoji: c.emoji, description: c.description },
+            matches,
+            count: matches.length,
+          };
+        }).filter(s => s.count >= 2);
+      } else if (!res.noToken) {
+        console.warn('IA no disponible, se muestran solo sugerencias por regex:', res.error);
+        showToast('⚠️ IA no disponible (revisa el token), usando solo análisis local');
+      }
+    }
+
+    // Sugerencias por expresiones regulares (sagas locales), sin duplicar las de la IA
+    const localSuggestions = analyzeSagas(state.allGames);
+    const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const aiLabels = new Set(aiSuggestions.map(s => norm(s.saga.label)));
+    const aiSets   = new Set(aiSuggestions.map(s => s.matches.map(g => g.path).sort().join('|')));
+    const extras = localSuggestions.filter(s => {
+      if (aiLabels.has(norm(s.saga.label))) return false;
+      const key = s.matches.map(g => g.path).sort().join('|');
+      return !aiSets.has(key);
+    });
+
+    state.suggestions = [...aiSuggestions, ...extras];
+  } catch (e) {
+    console.warn('Error IA, usando análisis local:', e);
+    state.suggestions = analyzeSagas(state.allGames);
+  } finally {
+    sagaAnalysisRunning = false;
+  }
+
   if (state.currentView === 'collections') renderSuggestions();
 }
 
 function renderSuggestions() {
   const sc = $('sugg-cards');
   if (!state.suggestions.length) {
-    sc.innerHTML = '<div class="sugg-empty">No se detectaron sagas con 2+ juegos.</div>';
+    sc.innerHTML = '<div class="sugg-empty">No se generaron sugerencias de colecciones.</div>';
     return;
   }
   sc.innerHTML = '';
