@@ -972,6 +972,7 @@ $('add-rom-upload-btn').addEventListener('click', async () => {
 
     const res = await window.r36s.uploadRom({
       localPath,
+      fileName: r.file.name,
       systemPath,
       meta: r.meta,
       localImage: r.localImagePath || null,
@@ -1062,7 +1063,7 @@ function openRomMeta(index) {
 
   // Portada
   if (r.localImagePath) {
-    $('rom-meta-img').src = 'file://' + r.localImagePath;
+    $('rom-meta-img').src = fileUrl(r.localImagePath);
     $('rom-meta-img').classList.remove('hidden');
     $('rom-meta-no-img').classList.add('hidden');
   } else {
@@ -1118,10 +1119,11 @@ $('rom-meta-ok').addEventListener('click', () => {
 
 // Buscar portada desde el meta editor
 $('rom-meta-scrape-btn').addEventListener('click', async () => {
-  const name = $('rom-meta-name').value.trim() || (pendingRoms[romMetaIndex]?.file?.name || '');
+  const picked = pendingRoms[romMetaIndex]?.file?.name || '';
+  const name = $('rom-meta-name').value.trim() || picked.replace(/\.[^.]+$/, '');
   const sys = $('add-rom-system').options[$('add-rom-system').selectedIndex]?.text || '';
   $('rom-meta-scrape-status').classList.remove('hidden');
-  $('rom-meta-scrape-msg').textContent = 'Buscando en Google Images…';
+  $('rom-meta-scrape-msg').textContent = 'Buscando portada y datos…';
   $('rom-meta-scrape-grid').classList.add('hidden');
   $('rom-meta-scrape-grid').innerHTML = '';
 
@@ -1132,13 +1134,14 @@ $('rom-meta-scrape-btn').addEventListener('click', async () => {
   ]);
   $('rom-meta-scrape-status').classList.add('hidden');
 
-  // Rellenar campos de metadata vacíos con la info obtenida de Google
+  // Rellenar campos de metadata vacíos con la info obtenida (Wikipedia)
   if (infoRes?.ok && infoRes.meta) {
     const m = infoRes.meta;
     if (m.desc && !$('rom-meta-desc').value.trim())           $('rom-meta-desc').value = m.desc;
     if (m.year && !$('rom-meta-year').value.trim())           $('rom-meta-year').value = m.year;
     if (m.genre && !$('rom-meta-genre').value.trim())         $('rom-meta-genre').value = m.genre;
     if (m.developer && !$('rom-meta-developer').value.trim()) $('rom-meta-developer').value = m.developer;
+    if (m.publisher && !$('rom-meta-publisher').value.trim()) $('rom-meta-publisher').value = m.publisher;
   }
 
   if (!res.ok || !res.options?.length) {
@@ -1151,7 +1154,7 @@ $('rom-meta-scrape-btn').addEventListener('click', async () => {
   $('rom-meta-scrape-grid').classList.remove('hidden');
   $('rom-meta-scrape-grid').innerHTML = res.options.map((opt, i) => `
     <div class="scrape-opt ${i === 0 ? 'selected' : ''}" data-idx="${i}" style="cursor:pointer;border-radius:8px;overflow:hidden;border:2px solid ${i === 0 ? 'var(--accent)' : 'transparent'}">
-      <img src="file://${esc(opt.localImage)}" style="width:100%;height:80px;object-fit:cover" />
+      <img src="${esc(fileUrl(opt.localImage))}" style="width:100%;height:80px;object-fit:cover" />
     </div>
   `).join('');
 
@@ -1162,7 +1165,7 @@ $('rom-meta-scrape-btn').addEventListener('click', async () => {
       const idx = +el.dataset.idx;
       const localImg = romMetaScrapeResult[idx].localImage;
       pendingRoms[romMetaIndex].localImagePath = localImg;
-      $('rom-meta-img').src = 'file://' + localImg;
+      $('rom-meta-img').src = fileUrl(localImg);
       $('rom-meta-img').classList.remove('hidden');
       $('rom-meta-no-img').classList.add('hidden');
     });
@@ -1171,7 +1174,7 @@ $('rom-meta-scrape-btn').addEventListener('click', async () => {
   // Seleccionar la primera por defecto
   if (res.options.length) {
     pendingRoms[romMetaIndex].localImagePath = res.options[0].localImage;
-    $('rom-meta-img').src = 'file://' + res.options[0].localImage;
+    $('rom-meta-img').src = fileUrl(res.options[0].localImage);
     $('rom-meta-img').classList.remove('hidden');
     $('rom-meta-no-img').classList.add('hidden');
   }
@@ -2227,6 +2230,7 @@ $('builder-save').addEventListener('click', async () => {
 
 let scrapeResult = null; // { query, options:[{localImage,imageExt,sourceUrl}] }
 let scrapeGame   = null; // juego actual en scraping
+let scrapeInfoMeta = null; // metadata obtenida (Wikipedia) para rellenar huecos
 let scrapeSelectedIndex = 0;
 
 // ── Botón Scrape en panel de detalle ────────────────────────
@@ -2244,16 +2248,19 @@ async function startScrape(game) {
 
   scrapeGame   = game;
   scrapeResult = null;
+  scrapeInfoMeta = null;
   scrapeSelectedIndex = 0;
 
   // Ocultar picker anterior, mostrar spinner
   $('scrape-picker-sheet').classList.add('hidden');
-  setScrapeStatus('searching', 'Buscando en Google Images…');
+  setScrapeStatus('searching', 'Buscando portada y datos…');
 
-  const res = await window.r36s.scrapeFetchGoogle({
-    game,
-    systemFolder: game.system,
-  });
+  const [res, infoRes] = await Promise.all([
+    window.r36s.scrapeFetchGoogle({ game, systemFolder: game.system }),
+    window.r36s.scrapeFetchGameInfo({ game, systemFolder: game.system }),
+  ]);
+
+  scrapeInfoMeta = infoRes?.ok ? infoRes.meta : null;
 
   if (!res.ok) {
     setScrapeStatus('error', '❌ ' + res.error);
@@ -2267,7 +2274,10 @@ async function startScrape(game) {
 
 function showScrapePreview(res) {
   const metaEl = $('scrape-picker-meta');
-  metaEl.innerHTML = `<span style="color:var(--text3)">Búsqueda:</span> ${esc(res.query || '')} · <span style="color:var(--text3)">Opciones:</span> ${res.options.length}`;
+  const infoBadge = scrapeInfoMeta
+    ? ' · <span style="color:var(--accent)">datos encontrados</span>'
+    : '';
+  metaEl.innerHTML = `<span style="color:var(--text3)">Búsqueda:</span> ${esc(res.query || '')} · <span style="color:var(--text3)">Opciones:</span> ${res.options.length}${infoBadge}`;
 
   const optEl = $('scrape-options');
   optEl.innerHTML = '';
@@ -2315,13 +2325,23 @@ $('scrape-confirm-btn').addEventListener('click', async () => {
     return;
   }
 
+  // Rellenar solo los campos que estén vacíos (no pisar datos existentes)
+  const metaUpdates = {};
+  if (scrapeInfoMeta) {
+    if (!scrapeGame.desc && scrapeInfoMeta.desc)                metaUpdates.desc      = scrapeInfoMeta.desc;
+    if (!gameYear(scrapeGame) && scrapeInfoMeta.year)           metaUpdates.year      = scrapeInfoMeta.year;
+    if (!scrapeGame.genre && scrapeInfoMeta.genre)              metaUpdates.genre     = scrapeInfoMeta.genre;
+    if (!scrapeGame.developer && scrapeInfoMeta.developer)      metaUpdates.developer = scrapeInfoMeta.developer;
+    if (!scrapeGame.publisher && scrapeInfoMeta.publisher)      metaUpdates.publisher = scrapeInfoMeta.publisher;
+  }
+
   const payload = {
     game:       scrapeGame,
     localImage: selected.localImage,
     localVideo: null,
     imageExt:   selected?.imageExt || '.jpg',
     videoExt:   null,
-    meta:       {},
+    meta:       metaUpdates,
   };
 
   // UI: spinner
@@ -2434,4 +2454,9 @@ function setFooterStatus(msg, status) {
 }
 function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+// Windows entrega rutas con "\"; file:// necesita "/"
+function fileUrl(p) {
+  if (!p) return '';
+  return 'file://' + String(p).replace(/\\/g, '/');
 }

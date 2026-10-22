@@ -37,6 +37,25 @@ function shQuote(value) {
   return `'${String(value || '').replace(/'/g, `'\\''`)}'`;
 }
 
+// ── Nombres de ROMs ──────────────────────────────────────────────────────────
+// Los archivos temporales locales se guardan como
+// `r36s_rom_<timestamp>_<nombre original>` para evitar colisiones en %TEMP%.
+// Ese prefijo NUNCA debe llegar a la consola: el nombre remoto tiene que ser
+// el original (ej. strhoop.zip), porque EmulationStation y los scrapers
+// emparejan los juegos por nombre de archivo.
+const TEMP_ROM_PREFIX_RE = /^r36s_rom_\d+_/i;
+
+function stripTempRomPrefix(name) {
+  return String(name || '').replace(TEMP_ROM_PREFIX_RE, '');
+}
+
+function sanitizeRomFileName(name) {
+  // basename soporta / y \ en Windows y POSIX
+  const base = path.basename(String(name || '').replace(/\\/g, '/')).trim();
+  // Caracteres inválidos o peligrosos en rutas remotas
+  return base.replace(/[\x00-\x1f<>:"|?*]/g, '_');
+}
+
 // ── SSH singleton ────────────────────────────────────────────────────────────
 let ssh = null;
 let sshConnected = false;
@@ -688,10 +707,17 @@ function sftpUploadWithProgress(localPath, remotePath, onProgress, stallMs = 60_
 // Sube una ROM (y opcionalmente su imagen de portada) a la consola via SSH
 // y actualiza el gamelist.xml con la metadata proporcionada.
 // Emite eventos 'rom-upload-progress' al renderer con { romFile, transferred, total, pct }.
-ipcMain.handle('ssh:upload-rom', async (event, { localPath, systemPath, meta, localImage }) => {
+ipcMain.handle('ssh:upload-rom', async (event, { localPath, fileName, systemPath, meta, localImage }) => {
   if (!sshConnected) return { ok: false, error: 'Not connected' };
 
-  const romFile   = path.basename(localPath);
+  // Nombre remoto = nombre original del archivo elegido por el usuario.
+  // Si no llega `fileName`, se intenta reconstruir desde el temporal local.
+  const originalName = sanitizeRomFileName(
+    stripTempRomPrefix(fileName || path.basename(localPath)),
+  );
+  const localExt  = path.extname(localPath);
+  const romFile   = originalName || sanitizeRomFileName(`rom_${Date.now()}${localExt}`);
+  const romBase   = path.basename(romFile, path.extname(romFile));
   const romRemote = `${systemPath}/${romFile}`;
 
   // Función para enviar progreso al renderer que invocó este IPC
@@ -718,7 +744,7 @@ ipcMain.handle('ssh:upload-rom', async (event, { localPath, systemPath, meta, lo
     if (localImage && fs.existsSync(localImage)) {
       sendProgress({ phase: 'image', romFile });
       const imgExt   = path.extname(localImage) || '.jpg';
-      const imgName  = path.basename(localPath, path.extname(localPath)) + imgExt;
+      const imgName  = romBase + imgExt;
       const imgDir   = `${systemPath}/media/images`;
       await ssh.execCommand(`mkdir -p ${shQuote(imgDir)}`);
       const imgRemote = `${imgDir}/${imgName}`;
@@ -729,13 +755,15 @@ ipcMain.handle('ssh:upload-rom', async (event, { localPath, systemPath, meta, lo
     // 3. Actualizar gamelist.xml via Python en la consola
     sendProgress({ phase: 'gamelist', romFile });
     const xmlPath = `${systemPath}/gamelist.xml`;
-    const gameName    = String(meta?.name     || path.basename(localPath, path.extname(localPath))).replace(/"/g, '\\"');
-    const gameDesc    = String(meta?.desc     || '').replace(/"/g, '\\"');
-    const gameDev     = String(meta?.developer|| '').replace(/"/g, '\\"');
-    const gamePub     = String(meta?.publisher|| '').replace(/"/g, '\\"');
-    const gameYear    = String(meta?.year     || '').replace(/"/g, '\\"');
-    const gameGenre   = String(meta?.genre    || '').replace(/"/g, '\\"');
-    const gameRating  = String(meta?.rating   || '').replace(/"/g, '\\"');
+    const gameName    = String(meta?.name      || romBase);
+    const gameDesc    = String(meta?.desc      || '');
+    const gameDev     = String(meta?.developer || '');
+    const gamePub     = String(meta?.publisher || '');
+    const rawYear     = String(meta?.year      || '').trim();
+    // EmulationStation espera YYYYMMDDTHHMMSS; aceptamos "1994" o la fecha completa.
+    const gameYear    = /^\d{4}$/.test(rawYear) ? `${rawYear}0101T000000` : rawYear;
+    const gameGenre   = String(meta?.genre     || '');
+    const gameRating  = String(meta?.rating    || '');
     const gameImage   = imagePath;
     const gamePath    = `./${romFile}`;
 
@@ -809,6 +837,10 @@ print('ok')
     }
 
     sendProgress({ phase: 'done', romFile });
+
+    // Limpiar el temporal de la ROM (puede ocupar GBs) para no llenar %TEMP%
+    try { if (localPath && localPath.startsWith(os.tmpdir())) fs.unlinkSync(localPath); } catch {}
+
     return { ok: true, romPath: romRemote, imagePath };
   } catch (e) {
     sendProgress({ phase: 'error', romFile, error: e.message });
@@ -1183,25 +1215,154 @@ function extractGoogleImageUrls(html) {
   return [...found];
 }
 
-function extractBingImageUrls(html) {
-  const found = new Set();
-  const patterns = [
-    /"murl":"(.*?)"/g,
-    /murl&quot;:&quot;(.*?)&quot;/g,
-  ];
+function decodeHtmlEntities(value) {
+  return String(value || '')
+    .replace(/&quot;/g, '"')
+    .replace(/&#0*39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(parseInt(d, 10)))
+    .replace(/&#x([\da-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}
 
-  for (const re of patterns) {
-    let m;
-    while ((m = re.exec(html)) !== null) {
-      const normalized = normalizeImageUrl(m[1]);
-      if (!normalized) continue;
-      found.add(normalized);
-      if (found.size >= 80) break;
-    }
-    if (found.size >= 80) break;
+// Bing expone los resultados de imágenes como JSON dentro del atributo m="{...}"
+// (con entidades HTML). De ahí salen la URL original, el título y la página.
+function parseBingImageResults(html) {
+  const results = [];
+  const seen = new Set();
+  const re = /m="({&quot;[\s\S]*?})"/g;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const raw = decodeHtmlEntities(m[1]);
+    let obj;
+    try { obj = JSON.parse(raw); } catch { continue; }
+    const url = String(obj.murl || '').trim();
+    if (!/^https?:\/\//i.test(url) || seen.has(url)) continue;
+    seen.add(url);
+    results.push({
+      url,
+      title: decodeHtmlEntities(obj.t || ''),
+      page: decodeHtmlEntities(obj.purl || ''),
+    });
+    if (results.length >= 120) break;
   }
+  return results;
+}
 
-  return [...found];
+// Puntúa una imagen candidata: portadas/flyers primero, iconos y vídeos después.
+function scoreImageCandidate(result) {
+  const hay = `${result.url} ${result.page} ${result.title}`;
+  let score = 0;
+  if (/arcade-museum|arcadeartwork|thegamesdb|video-games-museum|mobygames|gamefaqs|strategywiki/i.test(hay)) score += 30;
+  if (/\b(box|boxart|box-art|cover|flyer|marquee|cartridge)\b/i.test(hay)) score += 12;
+  if (/\b(front|frontal|front-cover)\b/i.test(hay)) score += 10;
+  if (/\.(png|jpe?g|webp)(\?|$)/i.test(result.url)) score += 3;
+  if (/\b(back|trasera|back-cover|media|disc|disk|manual|poster)\b/i.test(hay)) score -= 12;
+  if (/archive\.org\/details\/mame|emumovies/i.test(hay)) score -= 15;
+  if (/flyers\.arcade-museum\.com/i.test(hay)) score -= 60; // bloquea hotlinking (403)
+  if (/youtube|ytimg\.com|googleusercontent\.com|play\.google|uptodown|apkpure|ldplayer|\.apk\b/i.test(hay)) score -= 40;
+  if (/\b(icon|favicon|logo|logos|sprite|snap|screenshot)\b/i.test(hay)) score -= 25;
+  return score;
+}
+
+function normSearchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function tokenizeSearchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+// Títulos genéricos de webs de descargas/portadas que no son el nombre del juego
+const TITLE_NOISE_RE = /\b(mame[0-9a-z]*|m\.?a\.?m\.?e|tgdb?|artworks?|images?|imgs?|box|boxes|boxart|box-art|covers?|flyers?|posters?|promos?|downloads?|roms?|emulators?|emulador|verifying|screenshots?|snaps?|title\s*screens?|gameplay|history|looking\s+back|totals?|ratings?|reviews?|wikis?|databases?|museum)\b/i;
+
+
+// Nombres alternativos deducidos de los propios resultados de Bing
+// (p. ej. "strhoop" → "Street Hoop", útil para buscar en Wikipedia).
+function deriveTitleCandidates(results, baseName) {
+  const baseNorm = normSearchText(baseName);
+  const counts = new Map();
+  const add = raw => {
+    let title = String(raw || '').split(/\s+[|–—]\s+|\s+-\s+|\s+:\s+/)[0] || '';
+    title = title.replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
+    if (title.length < 3 || title.length > 48) return;
+
+    const norm = normSearchText(title);
+    const isBase = norm && norm === baseNorm;
+    if (!isBase && TITLE_NOISE_RE.test(title)) return;
+
+    const key = title.toLowerCase();
+    const current = counts.get(key);
+    if (current) current.count += 1;
+    else counts.set(key, { title, count: 1, isBase });
+  };
+
+  add(baseName);
+
+  // Preferir resultados que mencionan el código de la ROM: son los que
+  // contienen el título real (hsf2 → "Hyper Street Fighter II").
+  const coOccurring = results.filter(r =>
+    tokenizeSearchText(`${r.url} ${r.page} ${r.title}`).includes(baseNorm));
+  const source = coOccurring.length >= 2 ? coOccurring : results.slice(0, 40);
+  source.slice(0, 40).forEach(r => add(r.title));
+
+  return [...counts.values()]
+    .sort((a, b) => b.count - a.count)
+    .map(c => c.title)
+    .slice(0, 5);
+}
+
+function isRelevantImage(result, titleCandidates) {
+  const tokens = new Set(tokenizeSearchText(`${result.url} ${result.page} ${result.title}`));
+  if (!tokens.size) return false;
+
+  return titleCandidates.some(title => {
+    const words = tokenizeSearchText(title).filter(w => w.length >= 3);
+    if (!words.length) return false;
+    return words.every(w => tokens.has(w));
+  });
+}
+
+async function bingImageSearch(query, maxPages = 3) {
+  const results = [];
+  const seen = new Set();
+  for (let page = 0; page < maxPages; page++) {
+    const first = page * 35;
+    const url = `https://www.bing.com/images/async?q=${encodeURIComponent(query)}&first=${first}&count=35&scenario=ImageBasicHover`;
+    try {
+      const html = await fetchText(url);
+      for (const r of parseBingImageResults(html)) {
+        if (seen.has(r.url)) continue;
+        seen.add(r.url);
+        results.push(r);
+      }
+    } catch (e) {
+      debugScraper('bing:page-error', { first, error: e?.message || String(e) });
+    }
+    if (results.length >= 90) break;
+  }
+  return results;
+}
+
+function extFromContentType(contentType) {
+  const ct = String(contentType || '').toLowerCase();
+  if (ct.includes('png'))  return '.png';
+  if (ct.includes('webp')) return '.webp';
+  if (ct.includes('gif'))  return '.gif';
+  if (ct.includes('bmp'))  return '.bmp';
+  if (ct.includes('jpeg') || ct.includes('jpg')) return '.jpg';
+  return '.jpg';
 }
 
 function extFromUrl(url) {
@@ -1213,15 +1374,33 @@ function extFromUrl(url) {
   return '.jpg';
 }
 
-function downloadImageFile(url, destPath, redirectCount = 0) {
+// Detecta el formato real por los primeros bytes (algunos CDN no envían
+// Content-Type o envían application/octet-stream).
+function sniffImageExtension(filePath) {
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const head = Buffer.alloc(16);
+    fs.readSync(fd, head, 0, 16, 0);
+    fs.closeSync(fd);
+
+    if (head[0] === 0xFF && head[1] === 0xD8) return '.jpg';
+    if (head.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))) return '.png';
+    if (head.slice(0, 4).toString('ascii') === 'RIFF' && head.slice(8, 12).toString('ascii') === 'WEBP') return '.webp';
+    if (head.slice(0, 3).toString('ascii') === 'GIF') return '.gif';
+    if (head.slice(0, 2).toString('ascii') === 'BM') return '.bmp';
+  } catch {}
+  return '';
+}
+
+function downloadImageFile(url, destPath, referer = '', redirectCount = 0) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(destPath);
     const req = https.get(url, {
-      timeout: 15000,
+      timeout: 8000,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
         Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-        Referer: 'https://www.google.com/',
+        Referer: referer || 'https://www.bing.com/',
       },
     }, res => {
       if ([301, 302, 303, 307, 308].includes(res.statusCode)) {
@@ -1231,7 +1410,7 @@ function downloadImageFile(url, destPath, redirectCount = 0) {
         const location = res.headers.location;
         if (!location) return reject(new Error('Redirect without Location header'));
         const nextUrl = new URL(location, url).toString();
-        return downloadImageFile(nextUrl, destPath, redirectCount + 1).then(resolve).catch(reject);
+        return downloadImageFile(nextUrl, destPath, referer, redirectCount + 1).then(resolve).catch(reject);
       }
 
       if (res.statusCode !== 200) {
@@ -1241,10 +1420,13 @@ function downloadImageFile(url, destPath, redirectCount = 0) {
       }
 
       const contentType = String(res.headers['content-type'] || '').toLowerCase();
-      if (!contentType.startsWith('image/')) {
+      const maybeImage = !contentType
+        || contentType.startsWith('image/')
+        || contentType.includes('octet-stream');
+      if (!maybeImage) {
         file.close();
         try { fs.unlinkSync(destPath); } catch {}
-        return reject(new Error(`Invalid content-type: ${contentType || 'unknown'}`));
+        return reject(new Error(`Invalid content-type: ${contentType}`));
       }
 
       let totalBytes = 0;
@@ -1256,7 +1438,18 @@ function downloadImageFile(url, destPath, redirectCount = 0) {
             try { fs.unlinkSync(destPath); } catch {}
             return reject(new Error('Image too small'));
           }
-          resolve({ contentType, bytes: totalBytes });
+
+          const sniffed = sniffImageExtension(destPath);
+          if (!contentType.startsWith('image/') && !sniffed) {
+            try { fs.unlinkSync(destPath); } catch {}
+            return reject(new Error('El archivo descargado no es una imagen'));
+          }
+
+          resolve({
+            contentType,
+            ext: sniffed || extFromContentType(contentType),
+            bytes: totalBytes,
+          });
         });
       });
     });
@@ -1266,7 +1459,7 @@ function downloadImageFile(url, destPath, redirectCount = 0) {
       try { fs.unlinkSync(destPath); } catch {}
       reject(e);
     });
-    req.setTimeout(15000, () => {
+    req.setTimeout(8000, () => {
       req.destroy();
       file.close();
       try { fs.unlinkSync(destPath); } catch {}
@@ -1308,128 +1501,461 @@ function fetchText(url, redirectCount = 0) {
 }
 
 ipcMain.handle('scraper:fetch-google-images', async (_, { game, systemFolder }) => {
-  const baseName = game?.name || path.basename(game?.path || '', path.extname(game?.path || '')) || 'game';
-  const query = `${baseName} ${systemFolder || ''} box art`;
-  debugScraper('google:search:start', { query, gamePath: game?.path || null });
+  const baseName = stripTempRomPrefix(
+    path.basename(game?.name || game?.path || '', path.extname(game?.name || game?.path || '')),
+  ) || 'game';
+  const isArcade = /^(mame|fba|fbneo|arcade|neogeo|naomi|atomiswave|cps|daphne|model2|model3)/i
+    .test(String(systemFolder || ''));
+  const query = `${baseName} ${systemFolder || ''} ${isArcade ? 'arcade flyer' : 'box art'}`
+    .replace(/\s+/g, ' ')
+    .trim();
+  debugScraper('images:search:start', { query, gamePath: game?.path || null });
 
   try {
-    const searchUrls = [
-      `https://www.google.com/search?tbm=isch&hl=es&q=${encodeURIComponent(query)}`,
-      `https://www.google.com/search?tbm=isch&hl=es&start=20&q=${encodeURIComponent(query)}`,
+    // 1. Bing Images: su HTML incluye las URLs originales de las imágenes.
+    //    Google ya no las expone sin ejecutar JavaScript, así que es el fallback.
+    const results = await bingImageSearch(query, 3);
+
+    // En arcade a veces no hay flyer indexado; se refuerza con "box art".
+    if (isArcade && results.length < 20) {
+      const extra = await bingImageSearch(`${baseName} arcade box art`, 2);
+      const seen = new Set(results.map(r => r.url));
+      for (const r of extra) {
+        if (seen.has(r.url)) continue;
+        seen.add(r.url);
+        results.push(r);
+      }
+    }
+
+    if (results.length < 10) {
+      const searchUrls = [
+        `https://www.google.com/search?tbm=isch&hl=es&q=${encodeURIComponent(query)}`,
+        `https://www.google.com/search?tbm=isch&hl=es&start=20&q=${encodeURIComponent(query)}`,
+      ];
+      const seen = new Set(results.map(r => r.url));
+      for (const searchUrl of searchUrls) {
+        try {
+          const html = await fetchText(searchUrl);
+          extractGoogleImageUrls(html).forEach(u => {
+            if (seen.has(u)) return;
+            seen.add(u);
+            results.push({ url: u, title: '', page: '' });
+          });
+        } catch (e) {
+          debugScraper('google:search:error', { error: e?.message || String(e) });
+        }
+        if (results.length >= 60) break;
+      }
+    }
+
+    if (!results.length) {
+      debugScraper('images:search:none', { query });
+      return { ok: false, error: 'Sin resultados de imágenes para esta búsqueda' };
+    }
+
+    // 2. Priorizar imágenes que de verdad correspondan al juego y sean portadas.
+    //    El resto queda como reserva por si las primeras no se pueden descargar.
+    const titleCandidates = deriveTitleCandidates(results, baseName);
+    const relevant = results.filter(r => isRelevantImage(r, titleCandidates));
+    const relevantSet = new Set(relevant);
+    const byScore = (a, b) => scoreImageCandidate(b) - scoreImageCandidate(a);
+    const pool = [
+      ...relevant.slice().sort(byScore),
+      ...results.filter(r => !relevantSet.has(r)).sort(byScore),
     ];
-    const candidates = [];
-    const seen = new Set();
-    for (const searchUrl of searchUrls) {
-      const html = await fetchText(searchUrl);
-      extractGoogleImageUrls(html).forEach(u => {
-        if (!seen.has(u)) {
-          seen.add(u);
-          candidates.push(u);
-        }
-      });
-      if (candidates.length >= 120) break;
-    }
 
-    if (candidates.length < 20) {
-      const bingUrl = `https://www.bing.com/images/search?q=${encodeURIComponent(query)}&form=HDRSC3`;
-      const bingHtml = await fetchText(bingUrl);
-      extractBingImageUrls(bingHtml).forEach(u => {
-        if (!seen.has(u)) {
-          seen.add(u);
-          candidates.push(u);
-        }
-      });
-    }
+    debugScraper('images:search:results', {
+      query,
+      total: results.length,
+      relevant: relevant.length,
+      titles: titleCandidates,
+    });
 
-    if (!candidates.length) {
-      debugScraper('google:search:none', { query });
-      return { ok: false, error: 'Google Images no devolvió resultados descargables' };
-    }
-
+    // 3. Descargar hasta 5 opciones a %TEMP%
     const options = [];
     let attempts = 0;
-    for (const src of candidates) {
-      if (options.length >= 5) break;
-      if (attempts >= 120) break;
+    for (const item of pool) {
+      if (options.length >= 5 || attempts >= 40) break;
       attempts += 1;
-      const ext = extFromUrl(src);
-      const tmp = path.join(os.tmpdir(), `google_img_${Date.now()}_${attempts}${ext}`);
+      const tmpBase = path.join(os.tmpdir(), `scrape_img_${Date.now()}_${attempts}`);
+      const srcUrl = item.url.replace(/^http:\/\//i, 'https://');
+      const tmp = tmpBase + extFromUrl(srcUrl);
       try {
-        await downloadImageFile(src, tmp);
-        options.push({ localImage: tmp, imageExt: ext, sourceUrl: src });
+        const { ext: realExt } = await downloadImageFile(srcUrl, tmp, item.page);
+        let finalPath = tmp;
+        if (realExt !== path.extname(tmp).toLowerCase()) {
+          const renamed = tmpBase + realExt;
+          try { fs.renameSync(tmp, renamed); finalPath = renamed; }
+          catch { finalPath = tmp; }
+        }
+        options.push({
+          localImage: finalPath,
+          imageExt: path.extname(finalPath).toLowerCase() || realExt,
+          sourceUrl: item.url,
+        });
       } catch (e) {
-        debugScraper('google:download-skip', {
+        debugScraper('images:download-skip', {
           reason: e?.message || String(e),
-          sourceUrl: src.slice(0, 180),
+          sourceUrl: item.url.slice(0, 180),
         });
         try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
       }
     }
 
-    if (options.length < 5) {
-      debugScraper('google:search:partial', { query, options: options.length, candidates: candidates.length, attempts });
-    }
-
     if (!options.length) {
-      debugScraper('google:search:download-failed', { query, candidates: candidates.length, attempts });
-      return { ok: false, error: 'No se pudieron descargar imágenes de Google Images' };
+      debugScraper('images:download-failed', { query, candidates: pool.length, attempts });
+      return { ok: false, error: 'No se pudieron descargar imágenes. Prueba otro nombre.' };
     }
 
-    debugScraper('google:search:ok', { query, options: options.length, candidates: candidates.length, attempts });
-    return { ok: true, query, options };
+    debugScraper('images:search:ok', { query, options: options.length, candidates: pool.length, attempts });
+    return { ok: true, query, options, titles: titleCandidates };
   } catch (e) {
-    debugScraper('google:search:error', { query, error: e?.message || String(e) });
-    return { ok: false, error: `Google Images: ${e.message}` };
+    debugScraper('images:search:error', { query, error: e?.message || String(e) });
+    return { ok: false, error: `Búsqueda de imágenes: ${e.message}` };
   }
 });
 
-// ── IPC: scraper:fetch-game-info — busca metadata básica del juego en Google ──
-// Extrae: descripción, año, género, developer desde snippets de búsqueda web
-ipcMain.handle('scraper:fetch-game-info', async (_, { game, systemFolder }) => {
-  const baseName = game?.name || path.basename(game?.path || '', path.extname(game?.path || '')) || 'game';
-  const query = `${baseName} ${systemFolder || ''} videogame`;
-  debugScraper('game-info:start', { query });
+// ── Wikipedia: metadata de videojuegos (gratis y sin credenciales) ───────────
+// Se usa como fuente principal del "Buscar portada" → rellenar campos.
+// El nombre de la ROM suele ser un código corto (strhoop); deriveTitleCandidates
+// propone el título real ("Street Hoop") antes de consultar Wikipedia.
+
+function findTemplateEnd(text, start) {
+  let depth = 0;
+  for (let i = start; i < text.length - 1; i++) {
+    if (text[i] === '{' && text[i + 1] === '{') { depth += 1; i += 1; continue; }
+    if (text[i] === '}' && text[i + 1] === '}') { depth -= 1; i += 1; if (depth === 0) return i + 1; }
+  }
+  return -1;
+}
+
+function splitTopLevelParams(body) {
+  const parts = [];
+  let braces = 0;
+  let brackets = 0;
+  let current = '';
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === '{' && body[i + 1] === '{') { braces += 1; current += '{{'; i += 1; continue; }
+    if (c === '}' && body[i + 1] === '}') { braces -= 1; current += '}}'; i += 1; continue; }
+    if (c === '[' && body[i + 1] === '[') { brackets += 1; current += '[['; i += 1; continue; }
+    if (c === ']' && body[i + 1] === ']') { brackets -= 1; current += ']]'; i += 1; continue; }
+    if (c === '|' && braces === 0 && brackets === 0) { parts.push(current); current = ''; continue; }
+    current += c;
+  }
+  parts.push(current);
+  return parts;
+}
+
+function flattenCollapsibleLists(value) {
+  let text = String(value || '');
+  for (let i = 0; i < 5; i++) {
+    const match = text.match(/\{\{\s*(?:collapsible list|lista colapsable|listacolapsable)\s*\|/i);
+    if (!match) break;
+    const start = match.index;
+    const end = findTemplateEnd(text, start);
+    if (end < 0) break;
+
+    const body = text.slice(start + 2, end - 2);
+    const values = splitTopLevelParams(body)
+      .slice(1) // el primer trozo es el nombre de la plantilla
+      .filter(part => !/^\s*[\wáéíóúñ ]+\s*=/i.test(part))
+      .join(', ')
+      .trim();
+
+    text = text.slice(0, start) + values + text.slice(end);
+  }
+  return text;
+}
+
+function stripWikiMarkup(value) {
+  let text = flattenCollapsibleLists(value);
+
+  text = text
+    .replace(/<ref[^>]*\/>/gi, ' ')
+    .replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, ' ');
+
+  for (let i = 0; i < 5; i++) text = text.replace(/\{\{[^{}]*\}\}/g, ' ');
+
+  text = text
+    .replace(/\[\[([^\]|]*)\|([^\]]*)\]\]/g, '$2')
+    .replace(/\[\[([^\]]*)\]\]/g, '$1')
+    .replace(/\[https?:\/\/[^\s\]]+\s*([^\]]*)\]/g, '$1')
+    .replace(/<br\s*\/?>/gi, ', ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/'''?/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/\{\{|\}\}/g, ' ')
+    .replace(/\|/g, ' ')
+    .replace(/\s+,/g, ',')
+    .replace(/\s+/g, ' ')
+    .replace(/^[,;\s]+|[,;\s]+$/g, '');
+
+  return text.trim();
+}
+
+function parseGameInfobox(wikitext) {
+  const start = wikitext.search(/\{\{\s*(ficha de videojuego|infobox video game|infobox vg|videojuego)/i);
+  if (start < 0) return {};
+  const end = findTemplateEnd(wikitext, start);
+  if (end < 0) return {};
+
+  const params = {};
+  for (const part of splitTopLevelParams(wikitext.slice(start + 2, end - 2)).slice(1)) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    const key = part.slice(0, eq).trim().toLowerCase();
+    if (!key) continue;
+    params[key] = part.slice(eq + 1).trim();
+  }
+  return params;
+}
+
+function pickInfoboxField(params, keys) {
+  for (const key of keys) {
+    if (!params[key]) continue;
+    const clean = stripWikiMarkup(params[key]);
+    if (clean) return clean;
+  }
+  return '';
+}
+
+function firstYearIn(text) {
+  const m = String(text || '').match(/\b(19[5-9]\d|20[0-3]\d)\b/);
+  return m ? m[1] : '';
+}
+
+function infoboxYear(params) {
+  const raw = ['lanzamiento', 'released', 'fecha', 'release date', 'año', 'year']
+    .map(k => params[k])
+    .filter(Boolean)
+    .join(' ');
+  return firstYearIn(raw);
+}
+
+// Cliente HTTP para la API de Wikipedia: User-Agent identificable, caché en
+// memoria y un reintento ante 429 (límite de peticiones de Wikimedia).
+const WIKI_UA = 'r36s-manager/1.0 (EmulationStation ROM manager; desktop app)';
+const WIKI_COOLDOWN_MS = 60_000;
+const wikiCache = new Map();
+let wikiLastRequestAt = 0;
+let wikiCooldownUntil = 0;
+
+function fetchJsonWithHeaders(url, headers, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { timeout: 15000, headers }, res => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        if ([301, 302, 303, 307, 308].includes(res.statusCode)) {
+          if (redirects >= 5 || !res.headers.location) return reject(new Error('Redirect sin destino'));
+          return fetchJsonWithHeaders(new URL(res.headers.location, url).toString(), headers, redirects + 1)
+            .then(resolve).catch(reject);
+        }
+
+        const body = Buffer.concat(chunks).toString('utf8');
+        if (res.statusCode !== 200) {
+          const error = new Error(`HTTP ${res.statusCode}: ${body.slice(0, 120).replace(/\s+/g, ' ')}`);
+          error.statusCode = res.statusCode;
+          return reject(error);
+        }
+        try { resolve(JSON.parse(body)); }
+        catch (e) { reject(new Error(`Respuesta inválida: ${e.message}`)); }
+      });
+    }).on('error', reject).on('timeout', function () { this.destroy(); reject(new Error('Timeout')); });
+  });
+}
+
+async function wikiRequest(url) {
+  if (wikiCache.has(url)) return wikiCache.get(url);
+
+  if (Date.now() < wikiCooldownUntil) {
+    const error = new Error('Wikipedia limitó las peticiones temporalmente');
+    error.rateLimited = true;
+    throw error;
+  }
+
+  const wait = 200 - (Date.now() - wikiLastRequestAt);
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+  wikiLastRequestAt = Date.now();
 
   try {
-    const searchUrl = `https://www.google.com/search?hl=es&q=${encodeURIComponent(query)}`;
-    const html = await fetchText(searchUrl);
-
-    const meta = {};
-
-    // Extraer descripción del primer snippet/párrafo de resultado
-    const snippetMatch = html.match(/"([^"]{80,500})"/);
-    if (snippetMatch) {
-      const candidate = snippetMatch[1]
-        .replace(/\\u[\da-f]{4}/gi, c => String.fromCharCode(parseInt(c.slice(2), 16)))
-        .replace(/\\n/g, ' ').replace(/\s+/g, ' ').trim();
-      if (candidate.length > 50 && !candidate.includes('function') && !candidate.includes('{')) {
-        meta.desc = candidate.slice(0, 400);
-      }
-    }
-
-    // Año: buscar patrones de año relevantes
-    const yearMatches = html.match(/\b(19[7-9]\d|20[0-2]\d)\b/g) || [];
-    const yearCounts = {};
-    for (const y of yearMatches) yearCounts[y] = (yearCounts[y] || 0) + 1;
-    const topYear = Object.entries(yearCounts).sort((a, b) => b[1] - a[1])[0];
-    if (topYear) meta.year = topYear[0];
-
-    // Género: buscar palabras clave comunes de géneros de videojuegos
-    const genreKeywords = ['Action', 'RPG', 'Platform', 'Platformer', 'Adventure', 'Racing', 'Sports',
-      'Puzzle', 'Fighting', 'Shooter', 'Strategy', 'Simulation', 'Acción', 'Aventura', 'Carreras',
-      'Plataformas', 'Lucha', 'Disparos', 'Beat em up', 'Beat-em-up', 'Role-playing'];
-    for (const g of genreKeywords) {
-      if (html.toLowerCase().includes(g.toLowerCase())) {
-        meta.genre = g;
-        break;
-      }
-    }
-
-    const hasInfo = Object.keys(meta).length > 0;
-    debugScraper('game-info:' + (hasInfo ? 'ok' : 'none'), { query, meta });
-    return { ok: hasInfo, meta };
+    const json = await fetchJsonWithHeaders(url, {
+      'User-Agent': WIKI_UA,
+      Accept: 'application/json',
+      'Accept-Encoding': 'identity',
+    });
+    wikiCache.set(url, json);
+    return json;
   } catch (e) {
-    debugScraper('game-info:error', { query, error: e?.message || String(e) });
+    if (e.statusCode === 429) {
+      // Wikimedia pide bajar el ritmo: se detiene la consulta durante un minuto
+      wikiCooldownUntil = Date.now() + WIKI_COOLDOWN_MS;
+      e.rateLimited = true;
+    }
+    throw e;
+  }
+}
+
+async function wikiSearchTitles(lang, query) {
+  const url = `https://${lang}.wikipedia.org/w/api.php?action=query&list=search`
+    + `&srsearch=${encodeURIComponent(query)}&format=json&srlimit=5&srnamespace=0`;
+  const json = await wikiRequest(url);
+  return json?.query?.search || [];
+}
+
+// Una sola petición por artículo: extracto introductorio + wikitexto (infobox).
+async function wikiGameInfo(lang, title) {
+  const url = `https://${lang}.wikipedia.org/w/api.php?action=query&prop=extracts|revisions`
+    + `&exintro=1&explaintext=1&rvprop=content&rvslots=main`
+    + `&format=json&formatversion=2&titles=${encodeURIComponent(title)}`;
+  const json = await wikiRequest(url);
+  const page = json?.query?.pages?.[0];
+  if (!page || page.missing) return null;
+
+  const desc = String(page.extract || '').trim();
+  const wikitext = page.revisions?.[0]?.slots?.main?.content || '';
+  const params = parseGameInfobox(wikitext);
+
+  return {
+    lang,
+    title: page.title || title,
+    desc,
+    year: infoboxYear(params) || firstYearIn(desc),
+    developer: pickInfoboxField(params, ['desarrollador', 'developer', 'desarrollado por']),
+    publisher: pickInfoboxField(params, ['editor', 'publisher', 'editado por', 'distribuidor']),
+    genre: pickInfoboxField(params, ['género', 'genero', 'genre']),
+  };
+}
+
+// Busca un candidato en Wikipedia (es → en) validando que sea un videojuego.
+async function lookupWikipediaGame(candidate) {
+  const candidateNorm = normSearchText(candidate);
+  if (!candidateNorm) return null;
+
+  // Primero el nombre tal cual (cubre la mayoría); el sufijo solo si hace falta.
+  const attempts = [
+    { lang: 'es', query: candidate },
+    { lang: 'en', query: candidate },
+    { lang: 'es', query: `${candidate} videojuego` },
+    { lang: 'en', query: `${candidate} video game` },
+  ];
+
+  for (const { lang, query } of attempts) {
+    let hits;
+    try { hits = await wikiSearchTitles(lang, query); }
+    catch (e) {
+      if (e.rateLimited) throw e; // detiene toda la consulta
+      debugScraper('wiki:search-error', { lang, query, error: e?.message });
+      continue;
+    }
+
+    for (const hit of hits) {
+      const snippet = `${hit?.snippet || ''} ${hit?.title || ''}`;
+      if (!/videojuego|video game|arcade|recreativa/i.test(snippet)) continue;
+
+      let info;
+      try { info = await wikiGameInfo(lang, hit.title); }
+      catch (e) {
+        if (e.rateLimited) throw e;
+        debugScraper('wiki:page-error', { lang, title: hit.title, error: e?.message });
+        continue;
+      }
+      if (!info) continue;
+
+      const pageText = normSearchText(`${info.title} ${info.desc}`);
+      const titleNorm = normSearchText(info.title);
+      const related = pageText.includes(candidateNorm)
+        || (titleNorm && candidateNorm.includes(titleNorm))
+        || titleNorm.includes(candidateNorm);
+
+      if (related && (info.desc || info.developer || info.genre || info.year)) return info;
+    }
+  }
+  return null;
+}
+
+// ── IPC: scraper:fetch-game-info — rellena metadata del juego (Wikipedia) ────
+ipcMain.handle('scraper:fetch-game-info', async (_, { game, systemFolder }) => {
+  const baseName = stripTempRomPrefix(
+    path.basename(game?.name || game?.path || '', path.extname(game?.name || game?.path || '')),
+  ) || '';
+  debugScraper('game-info:start', { baseName, systemFolder });
+
+  const toMeta = info => {
+    const meta = {};
+    if (info.desc)      meta.desc      = info.desc.slice(0, 1200);
+    if (info.year)      meta.year      = info.year;
+    if (info.genre)     meta.genre     = info.genre;
+    if (info.developer) meta.developer = info.developer;
+    if (info.publisher) meta.publisher = info.publisher;
+    return meta;
+  };
+
+  try {
+    const displayName = game?.name ? String(game.name).replace(/\.[^.]+$/, '').trim() : '';
+    const isArcade = /^(mame|fba|fbneo|arcade|neogeo|naomi|atomiswave|cps|daphne|model2|model3)/i
+      .test(String(systemFolder || ''));
+    const directCandidates = [...new Set([baseName, displayName])].filter(Boolean);
+
+    // Los códigos cortos de arcade (strhoop, hsf2…) no existen en Wikipedia:
+    // se deduce primero el título real desde las imágenes.
+    const tryDirect = !isArcade || /\s/.test(baseName);
+
+    if (tryDirect) {
+      // 1. Primer intento con el nombre tal cual (rápido y sin búsquedas extra).
+      for (const candidate of directCandidates) {
+        const info = await lookupWikipediaGame(candidate);
+        if (!info) continue;
+        debugScraper('game-info:ok', { candidate, source: `${info.lang}:${info.title}` });
+        return { ok: true, meta: toMeta(info), source: { site: 'wikipedia', lang: info.lang, title: info.title } };
+      }
+    }
+
+    // 2. Deducción del título real a partir de los resultados de imágenes.
+    let altTitles = [];
+    if (Date.now() >= wikiCooldownUntil) {
+      try {
+        const imageResults = await bingImageSearch(
+          `${baseName} ${systemFolder || ''} arcade`.replace(/\s+/g, ' ').trim(),
+          2,
+        );
+        altTitles = deriveTitleCandidates(imageResults, baseName);
+      } catch (e) {
+        debugScraper('game-info:bing-error', { error: e?.message });
+      }
+    }
+
+    const altCandidates = [...new Set(altTitles)]
+      .map(c => String(c || '').replace(/\.[^.]+$/, '').trim())
+      .filter(c => c && c.toLowerCase() !== baseName.toLowerCase())
+      .slice(0, 4);
+
+    for (const candidate of altCandidates) {
+      const info = await lookupWikipediaGame(candidate);
+      if (!info) continue;
+      debugScraper('game-info:ok', { candidate, source: `${info.lang}:${info.title}` });
+      return { ok: true, meta: toMeta(info), source: { site: 'wikipedia', lang: info.lang, title: info.title } };
+    }
+
+    // 3. Último intento directo (por si el nombre ya era correcto).
+    if (Date.now() >= wikiCooldownUntil) {
+      for (const candidate of directCandidates) {
+        const info = await lookupWikipediaGame(candidate);
+        if (!info) continue;
+        debugScraper('game-info:ok', { candidate, source: `${info.lang}:${info.title}` });
+        return { ok: true, meta: toMeta(info), source: { site: 'wikipedia', lang: info.lang, title: info.title } };
+      }
+    }
+
+    debugScraper('game-info:none', { baseName, altCandidates });
+    return { ok: false, error: 'Sin información para este título' };
+  } catch (e) {
+    debugScraper('game-info:error', { baseName, error: e?.message || String(e) });
+    if (e.rateLimited) {
+      return { ok: false, error: 'Wikipedia limitó las peticiones; reintenta en un minuto' };
+    }
     return { ok: false, error: e.message };
   }
 });
@@ -1455,7 +1981,8 @@ ipcMain.handle('scraper:fetch', async (_, { game, systemFolder }) => {
     return { ok: false, error: `Sistema "${systemFolder}" no soportado` };
   }
 
-  const romName = path.basename(game.path || '', path.extname(game.path || ''));
+  const romFileName = stripTempRomPrefix(path.basename(game.path || ''));
+  const romName = path.basename(romFileName, path.extname(romFileName));
 
   // 1. Consultar API ScreenScraper
   let ssData;
@@ -1465,7 +1992,7 @@ ipcMain.handle('scraper:fetch', async (_, { game, systemFolder }) => {
       softname: 'r36s-manager', output: 'json',
       ssid: ssUser, sspassword: ssPass,
       systemeid: systemId,
-      romnom: path.basename(game.path || ''),
+      romnom: romFileName,
     });
     ssData = res?.response?.jeu;
     if (!ssData) {
@@ -1546,10 +2073,17 @@ ipcMain.handle('scraper:fetch', async (_, { game, systemFolder }) => {
 ipcMain.handle('scraper:commit', async (_, { game, localImage, localVideo, imageExt, videoExt, meta }) => {
   if (!sshConnected) return { ok: false, error: 'SSH no conectado' };
 
-  const romName   = path.basename(game.path || '', path.extname(game.path || ''));
+  const romName   = stripTempRomPrefix(path.basename(game.path || '', path.extname(game.path || '')));
   const imagesDir = `${game.systemPath}/images`;
   const videosDir = `${game.systemPath}/videos`;
   const updates   = { ...meta };
+
+  // EmulationStation usa <releasedate> con formato YYYYMMDDTHHMMSS
+  if (updates.year && !updates.releasedate) {
+    const year = String(updates.year).trim();
+    updates.releasedate = /^\d{4}$/.test(year) ? `${year}0101T000000` : year;
+    delete updates.year;
+  }
 
   // Subir imagen
   if (localImage && fs.existsSync(localImage)) {
